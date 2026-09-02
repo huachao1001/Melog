@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from .distributed import get_rank, reduce_metrics
+from .metrics import MetricGroup
 from .progress import TrainProgress
 from .web.server import MetricStore, WebServer
 
@@ -150,6 +151,29 @@ class Melog:
 
     # 兼容 wandb 风格别名
     log_metrics = log
+
+    def log_group(
+        self,
+        group: MetricGroup,
+        step: Optional[int] = None,
+        advance: int = 0,
+        reset: bool = False,
+    ) -> Dict[str, float]:
+        """记录一组 Metric 指标（跨 GPU 同步由 group.compute() 内部完成）。
+
+        所有 rank 都应调用本方法；仅 rank0 持久化与展示。
+
+        Args:
+            group: MetricGroup 实例。
+            step: 全局步数，缺省时内部自增。
+            advance: 进度条前进步数，epoch 级记录默认不推进。
+            reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
+        """
+        values = group.compute()
+        result = self.log(values, step=step, advance=advance)
+        if reset:
+            group.reset()
+        return result
 
     def _push_web(self, step: int, metrics: Dict[str, float]) -> None:
         if self._web is not None:

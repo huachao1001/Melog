@@ -38,6 +38,119 @@ logger.finish()   # 落盘剩余指标并停止 Web 服务
 
 训练期间浏览器打开 `http://127.0.0.1:8666` 查看实时曲线。
 
+## 指标计算（多 GPU 自动同步）
+
+内置 `Mean` / `Sum` / `Max` / `Min` / `Last` / `Count`，按 epoch 组织在 `MetricGroup` 中使用：
+
+```python
+from melog import Melog, Mean, Max, MetricGroup, Sum
+
+logger = Melog(project="my-exp")
+metrics = MetricGroup({
+    "loss": Mean(),      # 加权平均：update(loss, batch_size)
+    "acc": Mean(),
+    "seen": Sum(),       # 求和
+    "best_acc": Max(),   # 历史最大值
+    "lr": Mean(),        # 取最近值
+})
+
+with logger.train(total=steps * epochs) as bar:
+    for epoch in range(epochs):
+        for _ in range(steps):
+            metrics.update(loss=(loss, batch_size), acc=(acc, batch_size),
+                           seen=batch_size, best_acc=acc, lr=lr)
+            bar.advance(1)
+        logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
+```
+
+- `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
+- `Mean` / `Sum` / `Max` / `Min` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
+- `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
+- `logger.log_group(group, reset=True)` 等价于 `logger.log(group.compute()); group.reset()`
+
+### 分类指标
+
+内置 `Accuracy` / `Precision` / `Recall` / `F1` / `ConfusionMatrix`，接口与基础指标一致，
+`update(logits, labels)` 直接接收模型输出与标签：
+
+```python
+from melog import Accuracy, F1, MetricGroup, Mean, Precision
+
+metrics = MetricGroup({
+    "loss": Mean(),
+    "acc": Accuracy(),                 # 二分类：一维得分按阈值 0.5 判定
+    "acc5": Accuracy(topk=5),          # top-5 准确率（多分类）
+    "f1": F1(num_classes=10),          # 多分类：二维 (N, K) logits 按行 argmax
+})
+
+for logits, labels in val_loader:
+    # feed：框架按各指标的形参名/注册名自动分发，无需逐个传 (logits, labels)
+    metrics.feed(logits=logits, labels=labels, loss=(loss, batch_size))
+logger.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
+```
+
+- `Accuracy(topk=k)`：真实类别在前 k 个预测中即算正确
+- `Precision / Recall / F1` 的 `average`：`None`（二分类=正类，多分类=macro）/ `"macro"` / `"micro"` / `"weighted"`
+- `ConfusionMatrix` 的 `compute()` 返回矩阵（行=真实、列=预测），适合直接读取而非画曲线
+- 预测规则由 `preds_from_logits` 实现，可传 `predictor=` 替换（如多标签、分割等自定义转换）
+
+### 自定义指标
+
+**单批次指标（推荐）**：继承 `BatchMetric`，只实现 `compute_batch()` 一个函数。
+形参名和个数完全由你定义，框架按形参名自动从 `update()` / `feed()` 的观测中取值回调；
+累积、跨 GPU 合并、reset 全部由框架完成：
+
+```python
+from melog import BatchMetric
+
+class MaskedAcc(BatchMetric):
+    """需要几个参数就声明几个，logits/labels 仅为示例。"""
+    def compute_batch(self, logits, labels, mask):
+        hits = ((logits.argmax(-1) == labels) & mask).sum()
+        n = mask.sum()
+        return (hits / n, n)          # 返回 (值, 权重)：按样本数加权出全局结果
+
+# 训练循环里：位置或具名喂入均可，多余观测自动忽略
+metric.update(logits, labels, mask)
+metric.update(logits=logits, labels=labels, mask=mask)
+```
+
+- `compute_batch` 返回 `(值, 权重)` 元组：各 batch 按权重加权平均（样本数不同时务必带上权重）；
+  只返回 float 时各 batch 等权平均
+- 组合使用时交给 `MetricGroup.feed(...)` 统一分发：
+
+```python
+metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
+metrics.feed(logits=logits, labels=labels, mask=mask, loss=(loss, batch_size))
+logger.log_group(metrics, reset=True)
+```
+
+**epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
+继承 `Metric` 实现完整契约，跨 GPU 状态收集仍由基类完成：
+
+```python
+from melog import Metric
+
+class F1(Metric):
+    """epoch 末才能计算的指标：累积混淆计数，末尾统一算。"""
+    def __init__(self):
+        self.tp = self.fp = self.fn = 0.0
+
+    def update(self, tp, fp, fn):          # 每个 batch 累积本地计数
+        self.tp += tp; self.fp += fp; self.fn += fn
+
+    def state(self):                        # 导出可 pickle 的本地状态
+        return [self.tp, self.fp, self.fn]
+
+    def merge_states(self, states):         # states: 所有 rank 的状态（按 rank 顺序）
+        tp = sum(s[0] for s in states); fp = sum(s[1] for s in states)
+        fn = sum(s[2] for s in states)
+        return 2 * tp / (2 * tp + fp + fn) if tp + fp + fn else float("nan")
+
+    def reset(self):
+        self.tp = self.fp = self.fn = 0.0
+```
+
 ## 多 GPU
 
 代码无需修改，用 `torchrun` 启动即可：
@@ -89,7 +202,12 @@ melog F:/runs/exp1 --port 9000 --no-browser  # 自定义端口 / 不开浏览器
 melog/
 ├── core.py          # Melog 主类：记录、调度、JSONL 落盘
 ├── cli.py           # 命令行入口：melog <path>
-├── distributed.py   # 多 GPU all_reduce 合并
+├── distributed.py   # 多 GPU all_reduce / all_gather 原语
+├── metrics/         # 指标计算与跨 GPU 同步
+│   ├── base.py      # Metric / BatchMetric 基类（自定义指标继承其一）
+│   ├── basic.py     # Mean / Sum / Max / Min / Last / Count
+│   ├── classification.py  # Accuracy / Precision / Recall / F1 / ConfusionMatrix
+│   └── group.py     # MetricGroup：具名指标集合
 ├── downsample.py    # 曲线降采样
 ├── progress.py      # rich 进度条 + 指标列
 └── web/

@@ -20,3 +20,5 @@ melog_runs/
 # IDE
 .idea/
 .vscode/
+
+.codegraph/

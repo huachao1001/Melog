@@ -6,13 +6,14 @@ torch 未安装或未初始化分布式时，自动退化为单进程直通。
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 __all__ = [
     "is_distributed",
     "get_rank",
     "get_world_size",
     "reduce_metrics",
+    "gather_object",
 ]
 
 try:
@@ -84,3 +85,15 @@ def reduce_metrics(metrics: Dict[str, Any], op: str = "mean") -> Dict[str, float
         dist.all_reduce(t, op=dist.ReduceOp.SUM)
     divisor = world_size if op == "mean" else 1
     return {k: float(t.item()) / divisor for k, t in tensors.items()}
+
+
+def gather_object(obj: Any) -> List[Any]:
+    """把对象从所有进程收集到每个进程（结果按 rank 顺序排列）。
+
+    非分布式环境直接返回 [obj]，调用方无需区分场景。
+    """
+    if not is_distributed():
+        return [obj]
+    out: List[Any] = [None] * dist.get_world_size()
+    dist.all_gather_object(out, obj)
+    return out

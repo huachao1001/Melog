@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 测试 / 工具
+.pytest_cache/
+.coverage
+
+# Melog 运行产物
+melog_runs/
+
+# IDE
+.idea/
+.vscode/

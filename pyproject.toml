@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "melog"
+version = "0.1.0"
+description = "轻量级训练监控库：多 GPU 指标合并、控制台实时进度条、Web 可视化"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+dependencies = [
+    "rich>=13.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "websockets>=11.0",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+dev = ["pytest>=7.0", "httpx>=0.24"]
+
+[project.scripts]
+melog = "melog.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["melog*"]
+
+[tool.setuptools.package-data]
+"melog.web" = ["static/*"]

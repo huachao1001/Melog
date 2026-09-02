@@ -6,7 +6,7 @@ export class FileBrowser {
   constructor() {
     this.modal = document.getElementById('fbModal');
     this.listEl = document.getElementById('fbList');
-    this.pathEl = document.getElementById('fbPath');
+    this.crumbsEl = document.getElementById('fbCrumbs');
     this.msgEl = document.getElementById('fbMsg');
     this.cwd = '';      // 当前浏览目录，空表示盘符根层
     this.parent = '';   // 上一级目录，空表示已在根层
@@ -20,12 +20,12 @@ export class FileBrowser {
     document.getElementById('fbUp').addEventListener('click', () => {
       if (this.parent || this.cwd) this.navigate(this.parent);
     });
-    this.pathEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.navigate(e.target.value.trim());
+    // 点击面包屑空白处 → 切换为可编辑的路径输入框
+    this.crumbsEl.addEventListener('click', (e) => {
+      if (e.target === this.crumbsEl) this.#editPath();
     });
     document.getElementById('fbHere').addEventListener('click', () => {
-      const input = this.pathEl.value.trim();
-      if (input) this.load(input);
+      if (this.cwd) this.load(this.cwd);
       else this.msg('请先进入某个目录', 'err');
     });
     document.getElementById('fbLive').addEventListener('click', async () => {
@@ -72,7 +72,7 @@ export class FileBrowser {
   #renderRoots(roots) {
     this.cwd = '';
     this.parent = '';
-    this.pathEl.value = '';
+    this.#renderCrumbs(null);
     this.listEl.innerHTML = '';
     for (const root of roots) {
       this.#addItem(root, 'root', () => this.navigate(root));
@@ -82,7 +82,7 @@ export class FileBrowser {
   #renderDir(info) {
     this.cwd = info.path;
     this.parent = info.parent || '';
-    this.pathEl.value = info.path;
+    this.#renderCrumbs(info.path);
     this.listEl.innerHTML = '';
     if (info.parent) {
       this.#addItem('..', '', () => this.navigate(info.parent));
@@ -103,6 +103,54 @@ export class FileBrowser {
       hint.className = 'fb-empty';
       hint.textContent = '无melog文件';
       this.listEl.appendChild(hint);
+    }
+  }
+
+  /** 把面包屑切换成编辑框，回车跳转，Esc/失焦还原。 */
+  #editPath() {
+    const input = document.createElement('input');
+    input.className = 'fb-edit';
+    input.type = 'text';
+    input.spellcheck = false;
+    input.placeholder = '输入路径后回车';
+    input.value = this.cwd;
+    this.crumbsEl.innerHTML = '';
+    this.crumbsEl.appendChild(input);
+    input.focus();
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.navigate(input.value.trim());
+      if (e.key === 'Escape') this.#renderCrumbs(this.cwd || null);
+    });
+    input.addEventListener('blur', () => this.#renderCrumbs(this.cwd || null));
+  }
+
+  /** 渲染可点击的路径面包屑：每段目录一个淡色胶囊，点击跳转到该层级。 */
+  #renderCrumbs(path) {
+    this.crumbsEl.innerHTML = '';
+    if (!path) {
+      const chip = document.createElement('span');
+      chip.className = 'crumb current';
+      chip.textContent = '此电脑';
+      this.crumbsEl.appendChild(chip);
+      return;
+    }
+    const parts = path.split(/[\\/]/).filter(Boolean);
+    let acc = parts[0].endsWith(':') ? parts[0] + '\\' : '/' + parts[0];
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) acc = FileBrowser.join(acc, parts[i]);
+      const target = acc;  // 每层独立捕获，避免闭包共享同一个变量
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'crumb-sep';
+        sep.textContent = '›';
+        this.crumbsEl.appendChild(sep);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'crumb' + (i === parts.length - 1 ? ' current' : '');
+      chip.textContent = i === 0 ? parts[0] + (parts[0].endsWith(':') ? '\\' : '/') : parts[i];
+      chip.title = target;
+      chip.addEventListener('click', () => this.navigate(target));
+      this.crumbsEl.appendChild(chip);
     }
   }
 

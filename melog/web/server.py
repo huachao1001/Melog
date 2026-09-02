@@ -67,10 +67,41 @@ class WebServer:
 
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:
+        self.port = self._find_free_port(self.port)
         self._thread = threading.Thread(target=self._serve, name="melog-web", daemon=True)
         self._thread.start()
         self._started.wait(timeout=10)
+        # 等到端口真正可连接再返回，避免并发实例的端口探测竞态
+        self._wait_listening()
         logger.info("Melog Web 已启动: http://%s:%d", self.host, self.port)
+
+    def _wait_listening(self, timeout: float = 10) -> bool:
+        import socket
+        import time
+
+        probe_host = "127.0.0.1" if self.host in ("0.0.0.0", "::") else self.host
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.2)
+                if s.connect_ex((probe_host, self.port)) == 0:
+                    return True
+            time.sleep(0.1)
+        return False
+
+    @staticmethod
+    def _find_free_port(start: int, host: str = "127.0.0.1", tries: int = 20) -> int:
+        """端口被占用时自动向后顺延，避免 bind 失败拖垮训练。"""
+        import socket
+
+        for port in range(start, start + tries):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind((host, port))
+                    return port
+                except OSError:
+                    continue
+        return start
 
     def _serve(self) -> None:
         import uvicorn

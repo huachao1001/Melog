@@ -1,7 +1,8 @@
-"""文件浏览：盘符列举、目录内容列举、日志文件定位。"""
+"""文件浏览：根列表、目录内容列举、日志文件定位。"""
 
 from __future__ import annotations
 
+import os
 import string
 from pathlib import Path
 from typing import Dict, List
@@ -15,7 +16,9 @@ class FileBrowser:
 
     @staticmethod
     def list_roots() -> List[str]:
-        """Windows 盘符列表。"""
+        """文件系统根列表：Windows 为存在的盘符（X:/），POSIX 为根目录 /。"""
+        if os.name != "nt":
+            return ["/"]
         roots: List[str] = []
         for letter in string.ascii_uppercase:
             drive = Path(f"{letter}:/")

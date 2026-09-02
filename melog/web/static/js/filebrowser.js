@@ -1,6 +1,7 @@
 /** 文件浏览器弹窗：目录导航、日志加载、实时/历史切换。 */
 const ICON_DIR = '<svg class="fb-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 const ICON_LOG = '<svg class="fb-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export class FileBrowser {
   constructor() {
@@ -79,8 +80,15 @@ export class FileBrowser {
       if (info.file) return this.load(info.file);
       this.#renderDir(info);
     } catch (err) {
+      // 失败原因直接显示在列表区，避免弹窗一片空白
+      const div = document.createElement('div');
+      div.className = 'fb-empty';
+      div.textContent = err.message === 'Failed to fetch'
+        ? '无法连接服务：训练进程是否已停止？'
+        : (err.message || '加载失败');
       this.listEl.innerHTML = '';
-      this.msg(err.message, 'err');
+      this.listEl.appendChild(div);
+      this.msg(div.textContent, 'err');
     }
   }
 
@@ -89,6 +97,10 @@ export class FileBrowser {
     this.parent = '';
     this.#renderCrumbs(null);
     this.listEl.innerHTML = '';
+    if (!roots.length) {
+      this.listEl.innerHTML = '<div class="fb-empty">未找到可浏览的根目录</div>';
+      return;
+    }
     for (const root of roots) {
       this.#addItem(root, 'root', () => this.navigate(root));
     }
@@ -108,7 +120,7 @@ export class FileBrowser {
     for (const name of info.files) {
       const item = document.createElement('div');
       item.className = 'fb-item file';
-      item.innerHTML = ICON_LOG + `<span class="fb-name">${name}</span>`;
+      item.innerHTML = ICON_LOG + `<span class="fb-name">${esc(name)}</span>`;
       item.addEventListener('click', () => this.load(FileBrowser.join(info.path, name)));
       this.listEl.appendChild(item);
     }
@@ -150,6 +162,15 @@ export class FileBrowser {
       return;
     }
     const parts = path.split(/[\\/]/).filter(Boolean);
+    if (!parts.length) {
+      // 根目录（POSIX 的 "/"）：单枚不可再上级的胶囊
+      const chip = document.createElement('span');
+      chip.className = 'crumb current';
+      chip.textContent = '/';
+      chip.title = path;
+      this.crumbsEl.appendChild(chip);
+      return;
+    }
     let acc = parts[0].endsWith(':') ? parts[0] + '\\' : '/' + parts[0];
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) acc = FileBrowser.join(acc, parts[i]);
@@ -162,7 +183,7 @@ export class FileBrowser {
       }
       const chip = document.createElement('span');
       chip.className = 'crumb' + (i === parts.length - 1 ? ' current' : '');
-      chip.textContent = i === 0 ? parts[0] + (parts[0].endsWith(':') ? '\\' : '/') : parts[i];
+      chip.textContent = parts[i];  // 只显示目录名，路径分隔符省略
       chip.title = target;
       chip.addEventListener('click', () => this.navigate(target));
       this.crumbsEl.appendChild(chip);
@@ -172,7 +193,7 @@ export class FileBrowser {
   #addItem(name, cls, onClick) {
     const item = document.createElement('div');
     item.className = `fb-item ${cls}`;
-    item.innerHTML = (cls === 'file' ? ICON_LOG : ICON_DIR) + `<span class="fb-name">${name}</span>`;
+    item.innerHTML = (cls === 'file' ? ICON_LOG : ICON_DIR) + `<span class="fb-name">${esc(name)}</span>`;
     item.addEventListener('click', onClick);
     this.listEl.appendChild(item);
   }

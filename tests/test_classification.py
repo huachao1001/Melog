@@ -1,11 +1,11 @@
-"""分类指标单元测试：预测函数、Accuracy / P / R / F1 / 混淆矩阵、多 rank 合并、集成。"""
+"""分类指标单元测试：预测函数、Accuracy / P / R / F1 / AUC / 混淆矩阵、多 rank 合并、集成。"""
 
 import json
 
 import pytest
 
 from melog.core import Melog
-from melog.metrics import Accuracy, ConfusionMatrix, F1, MetricGroup, Precision, Recall, preds_from_logits
+from melog.metrics import Accuracy, AUC, ConfusionMatrix, F1, MetricGroup, Precision, Recall, preds_from_logits
 
 
 # ---------------------------------------------------------------- 预测函数
@@ -138,6 +138,32 @@ def test_prf_unknown_average():
         Precision(num_classes=3, average="bad")._from_counts({(0, 0): 1.0})
 
 
+def test_prf_class_index_single_class():
+    # 逐类指标：只看指定类别（one-vs-rest）
+    rec2 = Recall(num_classes=3, class_index=2)
+    rec2.update([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.1, 0.8]], [2, 0, 2])
+    assert rec2.compute() == pytest.approx(1.0)  # 类 2：tp=2, fn=0
+
+    rec2.reset()
+    rec2.update([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.9, 0.3]], [2, 0, 2])
+    assert rec2.compute() == pytest.approx(0.5)  # tp=1, fn=1
+    prec2 = Precision(num_classes=3, class_index=2)
+    prec2.update([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.9, 0.3]], [2, 0, 2])
+    assert prec2.compute() == pytest.approx(1.0)  # tp=1, fp=0
+
+    # 与 macro 对比：类 1 从未作为真实标签出现（recall 为 NaN 被跳过），
+    # macro = (1.0 + 0.5) / 2
+    r_macro = Recall(num_classes=3)
+    r_macro.update([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.9, 0.3]], [2, 0, 2])
+    assert r_macro.compute() == pytest.approx(0.75)
+
+
+def test_prf_class_index_absent_class_is_nan():
+    rec = Recall(num_classes=3, class_index=1)
+    rec.update([[0.9, 0.1, 0.2]], [0])
+    assert rec.compute() != rec.compute()  # 该类无样本 -> NaN
+
+
 # ---------------------------------------------------------------- ConfusionMatrix
 def test_confusion_binary():
     cm = ConfusionMatrix()
@@ -164,6 +190,67 @@ def test_confusion_multiclass_explicit_k():
     ]
 
 
+# ---------------------------------------------------------------- AUC
+def test_auc_binary_perfect_and_inverted():
+    auc = AUC()
+    auc.update([0.9, 0.8, 0.3, 0.1], [1, 1, 0, 0])
+    assert auc.compute() == pytest.approx(1.0)
+    auc.reset()
+    auc.update([0.1, 0.3, 0.8, 0.9], [1, 1, 0, 0])
+    assert auc.compute() == pytest.approx(0.0)
+
+
+def test_auc_known_value_and_ties():
+    auc = AUC()
+    # 正类得分 {0.9, 0.2}，负类 {0.1, 0.8}：赢 3 对输 1 对
+    auc.update([0.9, 0.1, 0.8, 0.2], [1, 0, 0, 1])
+    assert auc.compute() == pytest.approx(0.75)
+    # 全部并列 -> 0.5
+    auc.reset()
+    auc.update([0.5, 0.5, 0.5, 0.5], [1, 1, 0, 0])
+    assert auc.compute() == pytest.approx(0.5)
+
+
+def test_auc_2d_binary_uses_positive_column():
+    auc = AUC()
+    auc.update([[0.1, 0.9], [0.8, 0.2], [0.4, 0.6], [0.7, 0.3]], [1, 0, 1, 0])
+    # 正类列得分 [0.9, 0.6]，负类列 [0.2, 0.3] -> 全胜
+    assert auc.compute() == pytest.approx(1.0)
+
+
+def test_auc_multiclass_requires_class_index():
+    auc = AUC()
+    with pytest.raises(ValueError):
+        auc.update([[0.9, 0.1, 0.0], [0.0, 0.9, 0.1]], [0, 1])
+
+
+def test_auc_multiclass_one_vs_rest():
+    logits = [
+        [0.3, 0.5, 0.9],
+        [0.6, 0.1, 0.4],
+        [0.2, 0.8, 0.3],
+        [0.9, 0.2, 0.5],
+        [0.7, 0.3, 0.2],
+    ]
+    labels = [2, 0, 1, 0, 2]
+    a0 = AUC(class_index=0)
+    a0.update(logits, labels)
+    # 类 0 列得分 [0.3, 0.6, 0.2, 0.9, 0.7]；正类 {0.9, 0.6}，负类 {0.3, 0.2, 0.7}
+    # 0.9 胜 3 对，0.6 胜 2 对（输给 0.7）-> 5/6
+    assert a0.compute() == pytest.approx(5 / 6)
+    # 与"取出该列直接算二分类 AUC"等价
+    direct = AUC()
+    direct.update([0.3, 0.6, 0.2, 0.9, 0.7], [0, 1, 0, 1, 0])
+    assert direct.compute() == pytest.approx(a0.compute())
+
+
+def test_auc_empty_is_nan():
+    auc = AUC()
+    assert auc.compute() != auc.compute()
+    auc.update([0.9, 0.1], [1, 1])  # 只有正类 -> 无定义
+    assert auc.compute() != auc.compute()
+
+
 # ---------------------------------------------------------------- 多 rank 合并逻辑
 def test_accuracy_merge_across_ranks(monkeypatch):
     # rank0: 3/5；rank1: 1/1 -> 全局 4/6
@@ -185,6 +272,20 @@ def test_prf_merge_across_ranks(monkeypatch):
     p = Precision()
     p.update([0.9, 0.8, 0.6], [1, 0, 1])
     assert p.compute() == pytest.approx(5 / 6)
+
+
+def test_auc_merge_across_ranks(monkeypatch):
+    # rank0 前半 + rank1 后半，合并后与全量一致（AUC = 8/9）
+    scores = [0.9, 0.1, 0.8, 0.2, 0.7, 0.3]
+    labels = [1, 0, 1, 0, 0, 1]
+
+    def fake_gather(states):
+        return [states, [(0.2, False), (0.7, False), (0.3, True)]]
+
+    monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
+    auc = AUC()
+    auc.update(scores[:3], labels[:3])
+    assert auc.compute() == pytest.approx(8 / 9)
 
 
 # ---------------------------------------------------------------- MetricGroup / Melog 集成

@@ -87,6 +87,25 @@ def test_view_switches_between_realtime_and_loaded():
     assert "live" in view.snapshot()
 
 
+def test_view_colors_realtime_vs_loaded():
+    """颜色随视图切换：历史日志自带颜色优先，卸载后回到实时颜色。"""
+    store = MetricStore()
+    view = MetricView(store, max_points=100)
+    assert view.colors == {}
+
+    view.set_colors({"loss": "#ef4444"})
+    assert view.colors == {"loss": "#ef4444"}
+
+    view.set_loaded({"hist": [(0, 1.0)]}, colors={"acc": "#3b82f6"})
+    assert view.colors == {"acc": "#3b82f6"}
+
+    view.set_loaded({"hist2": [(0, 2.0)]})  # 无 colors.json 的历史日志
+    assert view.colors == {}
+
+    view.clear_loaded()
+    assert view.colors == {"loss": "#ef4444"}
+
+
 # ---------------------------------------------------------------- WsHub
 def test_hub_publish_without_clients_or_loop():
     hub = WsHub()

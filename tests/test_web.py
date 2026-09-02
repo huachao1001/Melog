@@ -59,10 +59,51 @@ def test_websocket_history(app_client):
         assert msg["metrics"]["loss"] == [{"step": 3, "value": 0.5}]
 
 
+def test_websocket_sends_colors(app_client):
+    """建连先发 history 再发 colors（可为空 dict）。"""
+    client, server = app_client
+    server.set_colors({"loss": "#ef4444"})
+    with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["type"] == "history"
+        msg = ws.receive_json()
+        assert msg["type"] == "colors"
+        assert msg["colors"]["loss"] == "#ef4444"
+
+
+def test_set_colors_updates_view(app_client):
+    """WebServer.set_colors 为整体替换；增量合并在 Melog.set_colors 层（见 test_core）。"""
+    client, server = app_client
+    server.set_colors({"recall/class_0": "#f00"})
+    assert server.view.colors == {"recall/class_0": "#f00"}
+    server.set_colors({"recall/class_0": "#f00", "loss": "steelblue"})
+    assert server.view.colors == {"recall/class_0": "#f00", "loss": "steelblue"}
+
+
+def test_load_restores_colors_sidecar(tmp_path):
+    """加载历史日志时恢复其 colors.json，卸载后回到实时颜色。"""
+    import json
+
+    log = tmp_path / "metrics.melog"
+    log.write_text('{"metric": "loss", "step": 0, "value": 1.0}\n', encoding="utf-8")
+    (tmp_path / "colors.json").write_text(
+        json.dumps({"loss": "#123456"}), encoding="utf-8"
+    )
+    server = WebServer(store=MetricStore(), port=8990, log_file=str(tmp_path / "live" / "metrics.melog"))
+    client = TestClient(server.app)
+    server.set_colors({"loss": "#abcdef"})  # 实时颜色
+
+    assert client.post("/api/load", json={"path": str(log)}).json()["ok"] is True
+    assert server.view.colors == {"loss": "#123456"}
+
+    client.post("/api/unload")
+    assert server.view.colors == {"loss": "#abcdef"}
+
+
 def test_publish_to_websocket(app_client):
     client, server = app_client
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()  # history
+        ws.receive_json()  # colors
         # 模拟后台线程推送
         time.sleep(0.1)
         import asyncio
@@ -76,12 +117,29 @@ def test_publish_to_websocket(app_client):
 
 # ---------------------------------------------------------------- 文件浏览
 def test_fs_roots():
+    import sys
+
     server = WebServer(store=MetricStore(), port=8998)
     client = TestClient(server.app)
     info = client.get("/api/fs").json()
-    assert "roots" in info
-    for root in info["roots"]:
-        assert root.endswith(":/") or root.endswith(":/") is False  # Windows 盘符形如 X:/
+    # 任何平台都应有可浏览的根：Windows 盘符（X:/），POSIX 为 "/"
+    assert info["roots"]
+    if sys.platform != "win32":
+        assert info["roots"] == ["/"]
+
+
+def test_fs_root_dir_posix():
+    """POSIX 根目录 "/" 可列举，且没有上一级（此前面包屑在此崩溃）。"""
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX 专属")
+    server = WebServer(store=MetricStore(), port=8992)
+    client = TestClient(server.app)
+    info = client.get("/api/fs", params={"path": "/"}).json()
+    assert info["path"] == "/"
+    assert info["parent"] is None
+    assert isinstance(info["dirs"], list)
 
 
 def test_fs_listing(tmp_path):

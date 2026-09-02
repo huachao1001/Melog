@@ -77,6 +77,19 @@ def test_log_returns_merged(logger):
     assert out == {"loss": 0.25}
 
 
+def test_set_colors_merges_and_persists(tmp_path):
+    lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
+    lg.set_colors({"recall/class_0": "#ef4444"})
+    lg.set_colors({"loss": "steelblue"})  # 增量合并，不覆盖前一次
+    lg.finish()
+
+    path = next((tmp_path / "t").glob("**/colors.json"))
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "recall/class_0": "#ef4444",
+        "loss": "steelblue",
+    }
+
+
 def test_step_auto_increment(logger):
     logger.log({"a": 1})
     logger.log({"a": 2})

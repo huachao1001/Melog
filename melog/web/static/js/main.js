@@ -4,7 +4,10 @@ import { FileBrowser } from './filebrowser.js';
 import { ThemeManager } from './theme.js';
 import { LiveSocket } from './ws.js';
 
-const PALETTE = ['#a855f7', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#84cc16', '#f97316'];
+const PALETTE = [
+  '#a855f7', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#84cc16', '#f97316',
+  '#3b82f6', '#14b8a6', '#6366f1', '#d946ef', '#eab308', '#22c55e', '#f43f5e', '#0ea5e9',
+];
 
 const charts = new ChartManager({
   palette: PALETTE,

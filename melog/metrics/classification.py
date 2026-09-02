@@ -23,6 +23,7 @@ __all__ = [
     "Precision",
     "Recall",
     "F1",
+    "AUC",
     "ConfusionMatrix",
 ]
 
@@ -184,13 +185,18 @@ class _PRF(_CountMetric):
         average: Optional[str] = None,
         threshold: float = 0.5,
         predictor: Optional[Predictor] = None,
+        class_index: Optional[int] = None,
     ):
         super().__init__(num_classes=num_classes, threshold=threshold, predictor=predictor)
         self.average = average
+        self.class_index = class_index
 
     def _from_counts(self, counts: Dict[Tuple[int, int], float]) -> float:
         if not counts:
             return float("nan")
+        if self.class_index is not None:  # 单类别（one-vs-rest），用于逐类曲线
+            tp, fp, fn = _per_class(counts).get(self.class_index, (0.0, 0.0, 0.0))
+            return _prf(self._mode, tp, fp, fn)
         if self.num_classes is None:  # 二分类：报告正类指标
             return _prf(
                 self._mode,
@@ -223,19 +229,23 @@ class _PRF(_CountMetric):
 
 
 class Precision(_PRF):
-    """精确率。average: None（二分类=正类，多分类=macro）/ "macro" / "micro" / "weighted"。"""
+    """精确率。average: None（二分类=正类，多分类=macro）/ "macro" / "micro" / "weighted"。
+
+    class_index: 指定单类别（one-vs-rest）只算该类，配合 Web 端
+    "precision/class_2" 式命名可逐类分图绘制曲线。
+    """
 
     _mode = "precision"
 
 
 class Recall(_PRF):
-    """召回率。average 同 Precision。"""
+    """召回率。average 同 Precision，class_index 同 Precision。"""
 
     _mode = "recall"
 
 
 class F1(_PRF):
-    """F1 分数。average 同 Precision。"""
+    """F1 分数。average 同 Precision，class_index 同 Precision。"""
 
     _mode = "f1"
 
@@ -259,3 +269,75 @@ class ConfusionMatrix(_CountMetric):
             if 0 <= p < k and 0 <= t < k:
                 matrix[t][p] += n
         return matrix
+
+
+def _rank_auc(scores: List[float], labels: List[int]) -> float:
+    """Mann-Whitney U 形式的 AUC：正类得分名次和法，并列得分取平均名次。"""
+    n_pos = sum(1 for t in labels if t == 1)
+    n_neg = len(labels) - n_pos
+    if not n_pos or not n_neg:  # 只有一类时 AUC 无定义
+        return float("nan")
+    order = sorted(range(len(scores)), key=lambda i: scores[i])
+    rank_sum_pos = 0.0
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and scores[order[j + 1]] == scores[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2 + 1  # 名次从 1 起，并列取平均
+        for k in range(i, j + 1):
+            if labels[order[k]] == 1:
+                rank_sum_pos += avg_rank
+        i = j + 1
+    return (rank_sum_pos - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+class AUC(BatchMetric):
+    """ROC AUC（阈值无关的排序指标）。
+
+    二分类：logits 为一维正类得分（(N, 2) 亦可，默认取第 pos_index 列），
+    compute() 返回 float —— 二分类无需逐类拆分，单曲线即可。
+    多分类：按 one-vs-rest 逐类计算，为每个类别各建一个实例并指定
+    class_index，配合 "auc/class_0" 式命名由 Web 端按前缀分组绘图；
+    未指定 class_index 的多分类输入会报错提示。
+
+    跨 GPU：状态为逐样本 (得分, 是否正类) 对，合并即拼接后整体计算，
+    与单进程全量结果一致。
+    """
+
+    def __init__(self, pos_index: int = 1, class_index: Optional[int] = None):
+        super().__init__()
+        self.pos_index = pos_index
+        self.class_index = class_index
+        self._pairs: List[Tuple[float, int]] = []
+
+    def compute_batch(self, logits: Any, labels: Any) -> List[Tuple[float, int]]:
+        rows = _plain(logits)
+        targets = _plain(labels)
+        _check_pair(rows, targets)
+        if rows and isinstance(rows[0], (list, tuple)):
+            if self.class_index is None and len(rows[0]) > 2:
+                raise ValueError(
+                    "多分类 AUC 请为每个类别各建一个实例并指定 class_index，"
+                    "如 AUC(class_index=i)，命名 auc/class_i 供 Web 分组绘图"
+                )
+            col = self.class_index if self.class_index is not None else self.pos_index
+            return [(float(row[col]), int(t) == col) for row, t in zip(rows, targets)]
+        if self.class_index is not None:
+            raise ValueError("一维输入为二分类正类得分，请勿设置 class_index")
+        return [(float(s), bool(t)) for s, t in zip(rows, targets)]
+
+    def _consume(self, out: List[Tuple[float, int]]) -> None:
+        self._pairs.extend(out)
+
+    def state(self) -> List[Tuple[float, int]]:
+        return list(self._pairs)
+
+    def merge_states(self, states: List[List[Tuple[float, int]]]) -> float:
+        pairs = [p for s in states for p in s]
+        if not pairs:
+            return float("nan")
+        return _rank_auc([s for s, _ in pairs], [1 if t else 0 for _, t in pairs])
+
+    def reset(self) -> None:
+        self._pairs = []

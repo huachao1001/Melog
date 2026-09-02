@@ -75,6 +75,11 @@ class WebServer:
         """线程安全：从训练主线程向所有 WebSocket 客户端广播增量指标。"""
         self.hub.publish({"type": "update", "step": step, "metrics": metrics})
 
+    def set_colors(self, colors: Dict[str, str]) -> None:
+        """线程安全：更新用户指定颜色（指标名 -> CSS 颜色）并广播。"""
+        self.view.set_colors(colors)
+        self.hub.publish({"type": "colors", "colors": dict(colors)})
+
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:
         self.port = self._find_free_port(self.port)

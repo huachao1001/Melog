@@ -3,6 +3,7 @@
 from .core import Melog
 from .metrics import (
     Accuracy,
+    AUC,
     BatchMetric,
     ConfusionMatrix,
     Count,
@@ -34,6 +35,7 @@ __all__ = [
     "Precision",
     "Recall",
     "F1",
+    "AUC",
     "ConfusionMatrix",
     "__version__",
 ]

@@ -70,6 +70,7 @@ class Melog:
         self._pending = 0
         self._closed = False
         self._lock = threading.Lock()
+        self._colors: Dict[str, str] = {}  # 用户指定的指标颜色（名称 -> CSS 颜色）
 
         self._run_dir = self._prepare_run_dir(output_dir)
         self._log_file = self._run_dir / "metrics.melog"
@@ -174,6 +175,28 @@ class Melog:
         if reset:
             group.reset()
         return result
+
+    # ------------------------------------------------------------------ 面板配色
+    def set_colors(self, colors: Dict[str, str]) -> None:
+        """指定指标在 Web 面板中的颜色（指标名 -> CSS 颜色字符串）。
+
+        未指定的指标仍按名称 hash 自动配色；同名指标重复设置会覆盖。
+        颜色随 colors.json 落盘（历史日志重新加载时一并恢复），并实时
+        推送到已连接的面板；多 GPU 下所有 rank 都可调用（仅 rank0 落盘）。
+
+        Args:
+            colors: 如 {"recall/class_0": "#ef4444", "loss": "steelblue"}，
+                支持 #RGB/#RRGGBB 等 CSS 颜色写法。
+        """
+        with self._lock:
+            self._colors.update(colors)
+        if not self._is_primary:
+            return
+        (self._run_dir / "colors.json").write_text(
+            json.dumps(self._colors, ensure_ascii=False), encoding="utf-8"
+        )
+        if self._web is not None:
+            self._web.set_colors(dict(self._colors))
 
     def _push_web(self, step: int, metrics: Dict[str, float]) -> None:
         if self._web is not None:

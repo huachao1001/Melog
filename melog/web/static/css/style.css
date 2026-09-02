@@ -9,6 +9,14 @@ body.dark {
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
 
+/* 滚动条：轨道透明（暗色下不再露白），滑块随主题；Firefox 用 scrollbar-color */
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 /* 头部 */
 header { padding: 12px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
 header img { display: block; height: 36px; }

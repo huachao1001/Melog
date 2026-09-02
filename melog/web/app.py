@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -69,9 +70,11 @@ class ApiRoutes:
         series = self.loader.parse(log_file)
         if not series:
             return JSONResponse(status_code=400, content={"error": "文件中没有可解析的指标"})
-        self.view.set_loaded(series)
+        colors = self._read_colors(log_file)  # 该日志运行时的用户指定颜色（如有）
+        self.view.set_loaded(series, colors)
         self.default_dir = str(log_file.parent)  # 默认浏览目录跟随当前展示日志
         await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
+        await self.hub.broadcast({"type": "colors", "colors": colors})
         return {"ok": True, "count": len(series), "path": str(log_file)}
 
     async def api_unload(self):
@@ -79,15 +82,27 @@ class ApiRoutes:
         self.view.clear_loaded()
         self.default_dir = self.initial_default
         await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
+        await self.hub.broadcast({"type": "colors", "colors": self.view.colors})
         return {"ok": True}
+
+    @staticmethod
+    def _read_colors(log_file: Path) -> dict:
+        """读取日志同目录的 colors.json（用户指定颜色），缺失或损坏时返回空。"""
+        path = log_file.parent / "colors.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
     # ------------------------------------------------------------------ WebSocket
     async def ws_endpoint(self, websocket: WebSocket):
         await websocket.accept()
         self.hub.attach(websocket)
         try:
-            # 建连即补发全量历史（降采样后），避免前端漏数据
+            # 建连即补发全量历史（降采样后），避免前端漏数据；随后下发用户指定颜色
             await websocket.send_json({"type": "history", "metrics": self.view.snapshot()})
+            await websocket.send_json({"type": "colors", "colors": self.view.colors})
             while True:
                 await websocket.receive_text()  # 保持连接，忽略客户端消息
         except WebSocketDisconnect:

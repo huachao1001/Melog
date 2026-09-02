@@ -15,6 +15,7 @@ from .base import BatchMetric, Metric
 from .basic import Count, Last, Max, Mean, Min, ScalarMetric, Sum
 from .classification import (
     Accuracy,
+    AUC,
     ConfusionMatrix,
     F1,
     Precision,
@@ -37,6 +38,7 @@ __all__ = [
     "Precision",
     "Recall",
     "F1",
+    "AUC",
     "ConfusionMatrix",
     "preds_from_logits",
     "MetricGroup",

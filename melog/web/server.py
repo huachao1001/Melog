@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import FastAPI, Request
@@ -32,13 +33,22 @@ class WebServer:
     - ApiRoutes:   路由注册
     """
 
-    def __init__(self, store: MetricStore, host: str = "127.0.0.1", port: int = 8666, max_points: int = 2000):
+    def __init__(
+        self,
+        store: MetricStore,
+        host: str = "127.0.0.1",
+        port: int = 8666,
+        max_points: int = 2000,
+        log_file: str = "",
+    ):
         self.store = store
         self.host = host
         self.port = port
         self.view = MetricView(store, max_points)
         self.hub = WsHub()
-        self.routes = ApiRoutes(self.view, self.hub, FileBrowser, LogLoader)
+        # 文件浏览器默认打开当前展示日志所在目录；无日志时退回进程 cwd
+        default_dir = str(Path(log_file).parent) if log_file else str(Path.cwd())
+        self.routes = ApiRoutes(self.view, self.hub, FileBrowser, LogLoader, default_dir=default_dir)
         self._thread: Optional[threading.Thread] = None
         self._server: Optional[object] = None
         self._started = threading.Event()

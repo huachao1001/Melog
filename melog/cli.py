@@ -74,7 +74,7 @@ def main(argv=None) -> int:
         print("文件中没有可解析的指标", file=sys.stderr)
         return 1
 
-    server = WebServer(store, host=args.host, port=args.port)
+    server = WebServer(store, host=args.host, port=args.port, log_file=str(log_file))
     server.start()
 
     print(f"Melog 可视化: {server.url}")

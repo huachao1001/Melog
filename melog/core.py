@@ -76,7 +76,13 @@ class Melog:
         self.store = MetricStore()
         self._web: Optional[WebServer] = None
         if enable_web and self._is_primary:
-            self._web = WebServer(self.store, host=web_host, port=web_port, max_points=max_plot_points)
+            self._web = WebServer(
+                self.store,
+                host=web_host,
+                port=web_port,
+                max_points=max_plot_points,
+                log_file=str(self._log_file),
+            )
             self._web.start()
 
         self._progress: Optional[TrainProgress] = None

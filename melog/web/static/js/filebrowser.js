@@ -36,7 +36,22 @@ export class FileBrowser {
 
   open() {
     this.modal.classList.remove('hidden');
-    this.navigate(this.cwd);
+    if (this.cwd) {
+      this.navigate(this.cwd);
+    } else {
+      // 首次打开：进入服务进程的当前工作目录
+      this.#openDefault();
+    }
+  }
+
+  async #openDefault() {
+    try {
+      const res = await fetch('/api/fs');
+      const info = await res.json();
+      await this.navigate(info.default || '');
+    } catch (err) {
+      this.navigate('');
+    }
   }
 
   close() {

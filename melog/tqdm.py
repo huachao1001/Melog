@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 __all__ = ["tqdm"]
 
@@ -107,6 +107,7 @@ class tqdm:
         mininterval: float = 0.1,
         unit: str = "it",
         colour: Optional[bool] = None,
+        on_close: Optional[Callable[[], None]] = None,
         **kwargs: Any,
     ):
         """
@@ -122,6 +123,8 @@ class tqdm:
                 Mirror 负责（默认 2 秒）。
             unit: 计数单位名，默认 "it"。
             colour: 是否使用主题色；None 时自动检测（终端 TTY 启用）。
+            on_close: 进度条关闭（close / 自然迭代结束）后的回调，
+                恰好执行一次；调用方（如 Melog）据此解除登记。
         """
         if total is None and iterable is not None:
             try:
@@ -137,6 +140,7 @@ class tqdm:
         self.mininterval = mininterval
         self.unit = unit
         self.colour = colour
+        self.on_close = on_close
         self.n = 0
         self.postfix: dict = {}
         self._value_w: Dict[str, int] = {}  # 各指标值的历史最宽字符数（定宽右对齐用）
@@ -165,8 +169,6 @@ class tqdm:
         now = time.monotonic()
         if now - self._last_render >= self.mininterval:
             self.render()
-
-    advance = update  # 兼容 Melog 旧版进度条 API
 
     def set_description(self, desc: Optional[str] = None) -> None:
         """更新前缀描述并立即重绘。"""
@@ -200,18 +202,19 @@ class tqdm:
         if self._closed:
             return
         self._closed = True
-        if self.disable:
-            return
-        stream = self._stream()
-        self.render()
-        if self.leave:
-            stream.write("\n")
-        else:
-            stream.write("\r" + " " * self._rendered_len + "\r")
-        if self._cursor_hidden:
-            self._cursor_hidden = False
-            stream.write("\x1b[?25h")
-        stream.flush()
+        if not self.disable:
+            stream = self._stream()
+            self.render()
+            if self.leave:
+                stream.write("\n")
+            else:
+                stream.write("\r" + " " * self._rendered_len + "\r")
+            if self._cursor_hidden:
+                self._cursor_hidden = False
+                stream.write("\x1b[?25h")
+            stream.flush()
+        if self.on_close is not None:
+            self.on_close()
 
     def __enter__(self) -> "tqdm":
         return self

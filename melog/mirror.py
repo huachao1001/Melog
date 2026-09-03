@@ -213,8 +213,3 @@ class Mirror:
         self._saved = ()
         self._stdout_tee = None
         self._hooked = False
-
-    @property
-    def console(self):
-        """接管前的控制台 stdout（进度条等需要绕过分流器时使用）。"""
-        return self._saved[0] if self._saved else sys.stdout

@@ -42,13 +42,13 @@ class WebServer:
         store: MetricStore,
         media_store: Optional[object] = None,
         host: str = "127.0.0.1",
-        port: int = 8666,
+        port: Optional[int] = None,
         max_points: int = 2000,
         log_file: str = "",
     ):
         self.store = store
         self.host = host
-        self.port = port
+        self.port = port  # None 时 start() 自动选择空闲端口
         self.view = MetricView(store, max_points)
         self.media_store = media_store if isinstance(media_store, MediaStore) else MediaStore()
         self.media_view = MediaView(self.media_store)
@@ -117,7 +117,8 @@ class WebServer:
 
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:
-        self.port = self._find_free_port(self.port)
+        # 端口被占用时自动向后顺延，避免 bind 失败拖垮训练
+        self.port = self._find_free_port(self.port if self.port is not None else 8666)
         self._thread = threading.Thread(target=self._serve, name="melog-web", daemon=True)
         self._thread.start()
         self._started.wait(timeout=10)
@@ -141,7 +142,7 @@ class WebServer:
 
     @staticmethod
     def _find_free_port(start: int, host: str = "127.0.0.1", tries: int = 20) -> int:
-        """端口被占用时自动向后顺延，避免 bind 失败拖垮训练。"""
+        """从 start 起向后找到第一个空闲端口。"""
         import socket
 
         for port in range(start, start + tries):

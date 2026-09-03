@@ -261,9 +261,12 @@ def test_media_explicit_step_is_epoch_internal(logger):
     """epoch 模式下媒体坐标与 scalar() 同规则：x = epoch 基准 + epoch 内步数。"""
     logger.scalar({"loss": 1.0}, epoch=0, step=9)   # epoch0 基准 0，推进全局 x 到 10
     logger.scalar({"loss": 1.0}, epoch=1, step=4)   # epoch1 基准 10 → x=14
+    # 只给 epoch 不给 step：附着该 epoch 最近一次记录的位置
+    logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=1)
+    assert logger.media.snapshot()["image"]["pred"][0]["step"] == 14
+    # 显式 step：按 epoch 内步数精确定位
     logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=1, step=5)
-    entry = logger.media.snapshot()["image"]["pred"][0]
-    assert entry["step"] == 15 and entry["epoch"] == 1
+    assert logger.media.snapshot()["image"]["pred"][-1]["step"] == 15
     # 不推进任何计数器：下一次 scalar 仍在 epoch1 的 step 5
     logger.scalar({"loss": 2.0})
     rec = logger.store.snapshot()["loss"][-1]

@@ -13,7 +13,6 @@ import atexit
 import builtins
 import json
 import os
-import socket
 import sys
 import threading
 import time
@@ -40,11 +39,66 @@ _ORIG_PRINT = None
 _PRINT_PATCHED: list = []
 
 
-def _free_port() -> int:
-    """向系统要一个当前空闲的 TCP 端口。"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+class _Axis:
+    """训练坐标轴：全局 x 与 epoch 内步数的唯一裁决者。
+
+    坐标规则（scalar 写入与媒体定位共用同一实现，避免规则漂移）：
+    - 未启用 epoch：step 即全局 x
+    - epoch 模式：step 为 epoch 内步数，x = 该 epoch 的全局基准 + step；
+      epoch 内步数缺省内部自增，全局 x 跨 epoch 连续接续
+
+    写入型记录（scalar）走 resolve_commit + commit，会推进计数器；
+    附着型记录（媒体）走 resolve_attach，只读、绝不推进任何计数。
+    """
+
+    def __init__(self) -> None:
+        self.step = 0  # 下一个全局 x（= 已提交记录数）
+        self.epoch: Optional[int] = None  # 当前绑定 epoch（粘滞，幂等切换）
+        self.epoch_step = 0  # 当前 epoch 内已提交步数
+        self.bases: Dict[int, int] = {}  # 各 epoch 的全局 x 基准
+        self.last_x = 0  # 最近一次记录的全局 x
+        self.last_epoch: Optional[int] = None  # 最近一次记录的 epoch
+
+    @property
+    def base(self) -> int:
+        """当前 epoch 的全局 x 基准（未绑定 epoch 时为 0）。"""
+        return self.bases.get(self.epoch, 0) if self.epoch is not None else 0
+
+    def bind_epoch(self, epoch: int) -> None:
+        """进入 epoch（幂等）：epoch 内步数清零，全局 x 从上一位置接续。"""
+        if epoch != self.epoch:
+            self.epoch = epoch
+            self.epoch_step = 0
+            self.bases[epoch] = self.step
+
+    def resolve_commit(self, step: Optional[int] = None) -> "tuple[int, Optional[int]]":
+        """scalar 写入位置：缺省取下一个空槽（epoch 模式为 epoch 内步数）。"""
+        if self.epoch is None:
+            return (step if step is not None else self.step), None
+        s = step if step is not None else self.epoch_step
+        return self.base + s, self.epoch
+
+    def resolve_attach(self, step: Optional[int] = None,
+                       epoch: Optional[int] = None) -> "tuple[int, Optional[int]]":
+        """媒体附着位置：缺省附着最近一次记录；显式传 step 则精确定位。"""
+        if step is None and epoch is None:
+            return self.last_x, self.last_epoch
+        e = epoch if epoch is not None else self.epoch
+        if e is None:
+            return (step if step is not None else self.last_x), None
+        if step is not None:
+            return self.bases.get(e, self.base) + step, e
+        # 只给 epoch：最近记录属于该 epoch 则附着之，否则取该 epoch 当前槽位
+        if self.last_epoch == e:
+            return self.last_x, e
+        return self.bases.get(e, self.base) + self.epoch_step, e
+
+    def commit(self, x: int, epoch: Optional[int], step: Optional[int]) -> None:
+        """scalar 记录后推进计数器（附着型记录不调用）。"""
+        self.last_x, self.last_epoch = x, epoch
+        if epoch is not None:
+            self.epoch_step = (step + 1) if step is not None else self.epoch_step + 1
+        self.step = x + 1
 
 
 class Melog:
@@ -83,18 +137,11 @@ class Melog:
         """
         self.project = project
         self.reduce_op = reduce_op
-        self.web_port = web_port if web_port is not None else _free_port()
         self._flush_every = max(1, flush_every)
         self._enable_progress = enable_progress
         self._rank = get_rank()
         self._is_primary = self._rank == 0
-        self._step = 0
-        self._epoch: Optional[int] = None  # 当前 epoch（用户传入后粘滞生效）
-        self._epoch_step = 0  # 当前 epoch 内步数（未显式传入时内部统计）
-        self._epoch_base = 0  # 当前 epoch 起始处的全局 x（跨 epoch 连续）
-        self._epoch_bases: Dict[int, int] = {}  # 各 epoch 的全局 x 基准（媒体跨 epoch 定位）
-        self._last_x = 0  # 最近一次记录的全局 x（媒体默认附着于此）
-        self._last_epoch: Optional[int] = None  # 最近一次记录的 epoch
+        self._axis = _Axis()  # 全局 x / epoch 计数与定位的唯一所有者
         self._pending = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -111,7 +158,7 @@ class Melog:
                 self.store,
                 media_store=self.media,
                 host=web_host,
-                port=self.web_port,
+                port=web_port,
                 max_points=max_plot_points,
                 log_file=str(self._log_file),
             )
@@ -183,12 +230,9 @@ class Melog:
         """
         if self._progress is not None:
             raise RuntimeError("progress() 上下文不可嵌套")
-        with self._lock:
-            if epoch is not None and epoch != self._epoch:
-                self._epoch = epoch
-                self._epoch_step = 0
-                self._epoch_base = self._step
-                self._epoch_bases[epoch] = self._epoch_base
+        if epoch is not None:
+            with self._lock:
+                self._axis.bind_epoch(epoch)
         disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
         if epoch is not None and "desc" not in kwargs:
             kwargs["desc"] = f"epoch {epoch}"
@@ -196,17 +240,14 @@ class Melog:
         return self._register_progress(bar)
 
     def _register_progress(self, bar: tqdm) -> tqdm:
-        """登记当前进度条（scalar() 的 postfix/advance 作用其上），close 后自动解除。"""
+        """登记当前进度条（scalar() 的 postfix/advance 作用其上），关闭后自动解除。"""
         self._progress = bar
-        original_close = bar.close
-
-        def _close() -> None:
-            original_close()
-            if self._progress is bar:
-                self._progress = None
-
-        bar.close = _close
+        bar.on_close = lambda: self._forget_progress(bar)
         return bar
+
+    def _forget_progress(self, bar: tqdm) -> None:
+        if self._progress is bar:
+            self._progress = None
 
     # ------------------------------------------------------------------ 记录指标
     def scalar(
@@ -215,7 +256,6 @@ class Melog:
         step: Optional[int] = None,
         epoch: Optional[int] = None,
         advance: int = 0,
-        commit: bool = True,
     ) -> Dict[str, float]:
         """记录一批指标。
 
@@ -231,7 +271,6 @@ class Melog:
                 上次显式传入），从未设置则不记录 epoch。
             advance: 额外推进进度条的步数（progress() 迭代每次已自动
                 推进 1，缺省 0；仅一个迭代内多次 scalar() 等场景需要传入）。
-            commit: 是否推进内部 step 计数。
         Returns:
             合并后的指标（rank>0 也返回，便于本地打印）。
         """
@@ -241,32 +280,18 @@ class Melog:
             return merged
 
         with self._lock:
-            if epoch is not None and epoch != self._epoch:
-                # 切换 epoch：epoch 内步数清零，全局 x 从上一位置接续
-                self._epoch = epoch
-                self._epoch_step = 0
-                self._epoch_base = self._step
-                self._epoch_bases[epoch] = self._epoch_base
-            if self._epoch is None:
-                x = step if step is not None else self._step
-                out_epoch = None
-            else:
-                s = step if step is not None else self._epoch_step
-                x = self._epoch_base + s
-                out_epoch = self._epoch
+            if epoch is not None:
+                self._axis.bind_epoch(epoch)
+            x, out_epoch = self._axis.resolve_commit(step)
             self.store.add(x, merged, out_epoch)
             self._push_web(x, merged, out_epoch)
             self._update_progress(merged)
             if advance and self._progress is not None:
                 self._progress.update(advance)
             self._maybe_flush()
-            self._last_x, self._last_epoch = x, out_epoch
-            if commit:
-                self._epoch_step = (step + 1) if step is not None else (self._epoch_step + 1)
-                self._step = x + 1
+            self._axis.commit(x, out_epoch, step)
         return merged
 
-    # 兼容 wandb 风格别名
     # 兼容 wandb 风格别名
     log_metrics = scalar
 
@@ -327,7 +352,7 @@ class Melog:
             return
         safe = sanitize_name(name)
         with self._lock:
-            x, e = self._media_position(step, epoch)
+            x, e = self._axis.resolve_attach(step, epoch)
             rel = f"media/{kind}/{safe}/{save(self._run_dir / 'media' / kind / safe, f'{int(x):09d}')}"
             record: Dict[str, Any] = {"type": kind, "metric": name, "step": int(x), "file": rel}
             if e is not None:
@@ -339,21 +364,6 @@ class Melog:
             self.media.add(kind, name, x, rel, e, sr=sr, caption=caption)
             self._append_journal(record)
             self._push_web_media(kind, name, x, e, rel, sr=sr, caption=caption)
-
-    def _media_position(self, step: Optional[int], epoch: Optional[int]):
-        """媒体条目的展示位置：坐标规则与 scalar() 一致，但不推进任何计数器。
-
-        缺省附着最近一次 scalar() 的位置；epoch 模式下 step 为 epoch 内
-        步数，x = 该 epoch 的全局基准 + step。
-        """
-        if step is None and epoch is None:
-            return self._last_x, self._last_epoch
-        e = epoch if epoch is not None else self._epoch
-        if e is None:
-            return (step if step is not None else self._last_x), None
-        base = self._epoch_bases.get(e, self._epoch_base)
-        s = step if step is not None else self._epoch_step
-        return base + s, e
 
     def _append_journal(self, record: Dict[str, Any]) -> None:
         """把一条记录追加到日志文件（调用方需持有 _lock）。"""
@@ -572,10 +582,9 @@ def scalar(
     step: Optional[int] = None,
     epoch: Optional[int] = None,
     advance: int = 0,
-    commit: bool = True,
 ) -> Dict[str, float]:
     """模块级便捷接口：等价于 ``current().scalar(...)``。"""
-    return current().scalar(metrics, step=step, epoch=epoch, advance=advance, commit=commit)
+    return current().scalar(metrics, step=step, epoch=epoch, advance=advance)
 
 
 def log(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:

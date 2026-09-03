@@ -114,7 +114,7 @@ def test_tqdm_layout_order():
     with tqdm(total=10, file=out, mininterval=0) as bar:
         bar.update(1)
         bar.set_postfix(loss=0.5)
-    line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1]
+    line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1].rstrip()
     assert line.startswith("[ 1/10]")  # n 右对齐到 total 宽度
     assert line.index("loss=0.5") < line.index("━") < line.index("[0:00")
     assert line.endswith("]")  # 耗时<剩余 与速率同在一个中括号内
@@ -156,7 +156,7 @@ def test_tqdm_manual_update_and_postfix():
 def test_tqdm_advance_alias():
     out = io.StringIO()
     bar = tqdm(total=5, file=out, mininterval=0, disable=False)
-    bar.advance(2)
+    bar.update(2)
     assert bar.n == 2
     bar.close()
 

@@ -1,7 +1,7 @@
 ﻿"""多 GPU 训练示例：MetricGroup 指标 + 跨进程自动同步。
 
-运行：
-    torchrun --nproc_per_node=2 examples/multi_gpu_train.py
+运行：按你的分布式启动方式（如 torch.distributed 的 launch 工具）
+拉起多个 rank 进程执行本文件即可。
 未安装 torch 时自动退化为单进程，行为与单 GPU 示例一致。
 
 指标分三类：

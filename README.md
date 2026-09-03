@@ -3,12 +3,12 @@
 轻量级训练监控库：**多 GPU 指标合并 + 控制台实时进度条 + Web 可视化**。
 
 ```text
-demo ██████████░░░░░░  45% 90/200 0:00:03 loss=0.2153  acc=0.8974  lr=8.2e-04
+[90/200] loss=0.2153 acc=0.8974 lr=8.2e-04 ━━━━━━━━━━━──────────  45.0% [0:03<0:04 30.0it/s]
 ```
 
 ## 特性
 
-- **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），尾部实时刷新最新指标；进度条与 print 同步镜像到 console.log（进度条行 2 秒节流刷新）
+- **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），`[n/total]` 领先、指标紧随其后实时刷新；进度条与 print 同步镜像到 console.log（进度条行 2 秒节流刷新）
 - **多 GPU 指标合并**：基于 `torch.distributed` all_reduce 跨进程聚合（默认取均值），仅 rank0 记录与展示；未装 torch 自动退化单进程
 - **Web 可视化**：FastAPI + WebSocket + ECharts，后台线程运行，实时推送曲线，断线自动重连
 - **持久化**：指标自动写入 JSONL，供离线分析
@@ -25,18 +25,36 @@ pip install -e ".[torch]"   # 多 GPU 合并需要 torch
 ```python
 from melog import Melog
 
-mlog = Melog(project="my-exp", web_port=8666)
+logger = Melog(project="my-exp", web_port=8666)
 
-with mlog.train(total=1000) as bar:
-    for step in range(1000):
-        loss = train_one_step()
-        mlog.log({"loss": loss, "lr": 1e-3})   # 记录 + 更新进度条 + 推送 Web
-        bar.update(1)
+for step in logger.progress(range(1000)):     # tqdm 风格：自动推进，无需手动 update
+    loss = train_one_step()
+    logger.log({"loss": loss, "lr": 1e-3})    # 记录 + 刷新进度条指标 + 推送 Web
 
-mlog.finish()   # 落盘剩余指标并停止 Web 服务
+logger.finish()   # 落盘剩余指标并停止 Web 服务
 ```
 
 训练期间浏览器打开 `http://127.0.0.1:8666` 查看实时曲线。
+
+## 全局共享
+
+入口处 `init` 一次，项目任何地方直接用模块级接口，无需层层传递实例：
+
+```python
+import melog
+
+mlog = melog.init(project="my-exp")     # 或 melog.Melog(...)，自动成为全局活动实例
+
+# 任意其他模块中：
+import melog
+melog.log({"loss": 0.5}, epoch=epoch, step=step)
+melog.log_image("sample", img)
+melog.finish()                          # 训练结束收尾
+```
+
+- 最近一次创建的实例即全局活动实例（`melog.current()` 取回），`finish()` 后清空
+- 模块级 `log / log_group / log_image / log_audio / set_colors / finish` 与实例方法等价
+- 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
 
 ## 曲线上体现 epoch
 
@@ -47,7 +65,7 @@ mlog.finish()   # 落盘剩余指标并停止 Web 服务
 ```python
 for epoch in range(epochs):
     for step in range(steps):
-        mlog.log({"loss": loss, "lr": lr}, epoch=epoch, step=step)
+        logger.log({"loss": loss, "lr": lr}, epoch=epoch, step=step)
 ```
 
 - `epoch` 缺省时**粘滞沿用**上一次传入的值（整个 epoch 内只需传一次），从未传入则不记录 epoch
@@ -62,9 +80,9 @@ for epoch in range(epochs):
 媒体一并恢复：
 
 ```python
-mlog.log({"loss": loss}, epoch=epoch, step=step)
-mlog.log_image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
-mlog.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
+logger.log({"loss": loss}, epoch=epoch, step=step)
+logger.log_image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
+logger.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
 ```
 
 - `step` / `epoch` 缺省时自动附着到**最近一次 `log()` 的位置**，不推进 step 计数
@@ -82,7 +100,7 @@ mlog.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch
 ```python
 from melog import Melog, Mean, Max, MetricGroup, Sum
 
-mlog = Melog(project="my-exp")
+logger = Melog(project="my-exp")
 metrics = MetricGroup({
     "loss": Mean(),      # 加权平均：update(loss, batch_size)
     "acc": Mean(),
@@ -91,19 +109,17 @@ metrics = MetricGroup({
     "lr": Mean(),        # 取最近值
 })
 
-with mlog.train(total=steps * epochs) as bar:
-    for epoch in range(epochs):
-        for _ in range(steps):
-            metrics.update(loss=(loss, batch_size), acc=(acc, batch_size),
-                           seen=batch_size, best_acc=acc, lr=lr)
-            bar.update(1)
-        mlog.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
+for epoch in range(epochs):
+    for _ in logger.progress(range(steps)):
+        metrics.update(loss=(loss, batch_size), acc=(acc, batch_size),
+                       seen=batch_size, best_acc=acc, lr=lr)
+    logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
 ```
 
 - `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
 - `Mean` / `Sum` / `Max` / `Min` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
 - `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
-- `mlog.log_group(group, reset=True)` 等价于 `mlog.log(group.compute()); group.reset()`
+- `logger.log_group(group, reset=True)` 等价于 `logger.log(group.compute()); group.reset()`
 
 ### 分类指标
 
@@ -123,7 +139,7 @@ metrics = MetricGroup({
 for logits, labels in val_loader:
     # feed：框架按各指标的形参名/注册名自动分发，无需逐个传 (logits, labels)
     metrics.feed(logits=logits, labels=labels, loss=(loss, batch_size))
-mlog.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
+logger.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
 ```
 
 - `Accuracy(topk=k)`：真实类别在前 k 个预测中即算正确
@@ -159,7 +175,7 @@ metric.update(logits=logits, labels=labels, mask=mask)
 ```python
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 metrics.feed(logits=logits, labels=labels, mask=mask, loss=(loss, batch_size))
-mlog.log_group(metrics, reset=True)
+logger.log_group(metrics, reset=True)
 ```
 
 **epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
@@ -216,10 +232,11 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 ### 主要方法
 
-- `log(metrics, step=None, epoch=None, advance=1)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
+- `log(metrics, step=None, epoch=None, advance=0)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
 - `log_image(name, data, step=None, epoch=None)` / `log_audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
-- `train(total)` — 返回进度条上下文管理器（`bar.update(n)` 推进）
+- `progress(iterable)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`log()` 指标实时显示在条上
 - `finish()` — 落盘并停止 Web 服务
+- 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.log(...)` 等可在任意位置直接调用（见上文）
 
 进度条显示的指标可通过环境变量 `MELOG_DISABLE_PROGRESS=1` 全局关闭。
 

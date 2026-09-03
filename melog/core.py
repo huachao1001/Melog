@@ -14,7 +14,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterable, Optional, Union
 
 from .distributed import get_rank, reduce_metrics
 from .media import sanitize_name, save_audio, save_image
@@ -33,12 +33,10 @@ class Melog:
 
     用法：
         >>> from melog import Melog
-        >>> mlog = Melog(project="demo", enable_web=True)
-        >>> with mlog.train(total=100) as bar:
-        ...     for step in range(100):
-        ...         loss = 1.0 / (step + 1)
-        ...         mlog.log({"loss": loss, "lr": 1e-3})
-        ...         bar.update(1)
+        >>> logger = Melog(project="demo", enable_web=True)
+        >>> for step in logger.progress(range(100)):
+        ...     loss = 1.0 / (step + 1)
+        ...     logger.log({"loss": loss, "lr": 1e-3})
     """
 
     def __init__(
@@ -105,6 +103,8 @@ class Melog:
         if self._is_primary:
             self.mirror = Mirror(self._run_dir / "console.log")
             self.mirror.hook_stdio()
+        # 注册为全局活动实例（见 melog.current / 模块级 melog.log 等便捷接口）
+        _set_active(self)
 
     # ------------------------------------------------------------------ 运行目录
     def _prepare_run_dir(self, output_dir: Optional[str]) -> Path:
@@ -121,17 +121,45 @@ class Melog:
         return self._run_dir
 
     # ------------------------------------------------------------------ 训练上下文
-    def train(self, total: int, description: str = "train") -> tqdm:
-        """返回 tqdm 兼容的训练进度条（用法与 tqdm.tqdm 一致）。
+    def progress(
+        self,
+        iterable: Iterable,
+        description: str = "",
+        total: Optional[float] = None,
+        **kwargs: Any,
+    ) -> tqdm:
+        """tqdm 风格进度条：直接包裹可迭代对象，迭代时自动推进，无需手动 update。
 
-        进度条实时渲染到控制台，并经 Mirror 同步进 console.log；
-        非 rank0 或设置 MELOG_DISABLE_PROGRESS=1 时静默。
+        用法与 tqdm.tqdm 一致::
+
+            for batch in logger.progress(loader):
+                logger.log({"loss": loss})   # 指标实时显示在进度条上
+
+        进度条布局：[n/total] 最前，指标其后，条形图/百分比/耗时殿后；
+        description 提供时显示在行首（默认不显示）。total 缺省时自动取
+        len(iterable)。进度条实时渲染到控制台，并经 Mirror 同步进
+        console.log；非 rank0 或设置 MELOG_DISABLE_PROGRESS=1 时静默。
+        迭代自然结束后自动解除登记，可再次调用 progress()（如每个
+        epoch 一条进度条）。
         """
         if self._progress is not None:
-            raise RuntimeError("train() 上下文不可嵌套")
+            raise RuntimeError("progress() 上下文不可嵌套")
         disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
-        self._progress = tqdm(total=total, desc=description, disable=disable)
-        return self._progress
+        bar = tqdm(iterable=iterable, total=total, desc=description, disable=disable, **kwargs)
+        return self._register_progress(bar)
+
+    def _register_progress(self, bar: tqdm) -> tqdm:
+        """登记当前进度条（log() 的 postfix/advance 作用其上），close 后自动解除。"""
+        self._progress = bar
+        original_close = bar.close
+
+        def _close() -> None:
+            original_close()
+            if self._progress is bar:
+                self._progress = None
+
+        bar.close = _close
+        return bar
 
     # ------------------------------------------------------------------ 记录指标
     def log(
@@ -139,7 +167,7 @@ class Melog:
         metrics: Dict[str, Union[float, int, Any]],
         step: Optional[int] = None,
         epoch: Optional[int] = None,
-        advance: int = 1,
+        advance: int = 0,
         commit: bool = True,
     ) -> Dict[str, float]:
         """记录一批指标。
@@ -153,7 +181,8 @@ class Melog:
                 缺省时内部自增（epoch 模式下每个 epoch 从 0 重新计步）。
             epoch: 当前 epoch 序号，曲线图据此标注 epoch 分界；
                 缺省沿用上一次传入的值，从未传入则不记录 epoch。
-            advance: 进度条前进步数。
+            advance: 额外推进进度条的步数（progress() 迭代每次已自动
+                推进 1，缺省 0；仅一个迭代内多次 log() 等场景需要传入）。
             commit: 是否推进内部 step 计数。
         Returns:
             合并后的指标（rank>0 也返回，便于本地打印）。
@@ -179,6 +208,8 @@ class Melog:
             self.store.add(x, merged, out_epoch)
             self._push_web(x, merged, out_epoch)
             self._update_progress(merged)
+            if advance and self._progress is not None:
+                self._progress.update(advance)
             self._maybe_flush()
             self._last_x, self._last_epoch = x, out_epoch
             if commit:
@@ -290,7 +321,7 @@ class Melog:
             group: MetricGroup 实例。
             step: 当前 epoch 内的步数，缺省时内部自增。
             epoch: 当前 epoch 序号，缺省沿用上一次传入的值。
-            advance: 进度条前进步数，epoch 级记录默认不推进。
+            advance: 额外推进进度条的步数，epoch 级记录默认不推进。
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """
         values = group.compute()
@@ -345,7 +376,10 @@ class Melog:
 
     # ------------------------------------------------------------------ 收尾
     def finish(self) -> None:
-        """落盘剩余指标，定稿进度条与日志镜像，停止 Web 服务。"""
+        """落盘剩余指标，定稿进度条与日志镜像，停止 Web 服务。
+
+        若本实例是全局活动实例（见 melog.current），收尾后一并清空。
+        """
         if self._closed:
             return
         self._closed = True
@@ -361,6 +395,8 @@ class Melog:
         if self._web is not None:
             self._web.stop()
             self._web = None
+        if _get_active() is self:
+            _set_active(None)
 
     def close(self) -> None:
         self.finish()
@@ -370,6 +406,93 @@ class Melog:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.finish()
+
+
+# ---------------------------------------------------------------------- 全局共享
+# 最近一次创建的 Melog 实例作为全局活动实例，供模块级便捷接口使用；
+# 实例本身线程安全（内部有锁），跨模块共享无需额外处理。
+_active: Optional["Melog"] = None
+
+
+def _get_active() -> Optional["Melog"]:
+    return _active
+
+
+def _set_active(inst: Optional["Melog"]) -> None:
+    global _active
+    _active = inst
+
+
+def current() -> "Melog":
+    """返回全局共享的 Melog 实例；尚未创建时抛出 RuntimeError。"""
+    if _active is None:
+        raise RuntimeError("尚未创建 Melog 实例：请先调用 melog.init(...)（或 Melog(...)）")
+    return _active
+
+
+def init(**kwargs: Any) -> Melog:
+    """创建并激活全局共享的 Melog 实例，参数与 Melog(...) 完全一致。
+
+    入口处调用一次，之后项目任意位置可直接使用模块级 melog.log() 等接口。
+    再次调用会用新实例替换当前活动实例。
+    """
+    return Melog(**kwargs)
+
+
+def log(
+    metrics: Dict[str, Union[float, int, Any]],
+    step: Optional[int] = None,
+    epoch: Optional[int] = None,
+    advance: int = 1,
+    commit: bool = True,
+) -> Dict[str, float]:
+    """模块级便捷接口：等价于 ``current().log(...)``。"""
+    return current().log(metrics, step=step, epoch=epoch, advance=advance, commit=commit)
+
+
+def log_group(
+    group: MetricGroup,
+    step: Optional[int] = None,
+    epoch: Optional[int] = None,
+    advance: int = 0,
+    reset: bool = False,
+) -> Dict[str, float]:
+    """模块级便捷接口：等价于 ``current().log_group(...)``。"""
+    return current().log_group(group, step=step, epoch=epoch, advance=advance, reset=reset)
+
+
+def log_image(
+    name: str,
+    data: Any,
+    step: Optional[int] = None,
+    epoch: Optional[int] = None,
+    caption: Optional[str] = None,
+) -> None:
+    """模块级便捷接口：等价于 ``current().log_image(...)``。"""
+    current().log_image(name, data, step=step, epoch=epoch, caption=caption)
+
+
+def log_audio(
+    name: str,
+    data: Any,
+    sr: int = 22050,
+    step: Optional[int] = None,
+    epoch: Optional[int] = None,
+    caption: Optional[str] = None,
+) -> None:
+    """模块级便捷接口：等价于 ``current().log_audio(...)``。"""
+    current().log_audio(name, data, sr=sr, step=step, epoch=epoch, caption=caption)
+
+
+def set_colors(colors: Dict[str, str]) -> None:
+    """模块级便捷接口：等价于 ``current().set_colors(...)``。"""
+    current().set_colors(colors)
+
+
+def finish() -> None:
+    """收尾全局活动实例（未创建时不做任何事）。"""
+    if _active is not None:
+        _active.finish()
 
 
 def _progress_disabled() -> bool:

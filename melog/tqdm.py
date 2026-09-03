@@ -12,9 +12,13 @@
         bar.update(10)
         bar.set_postfix(loss=0.21)
 
-样式（新设计，终端下与 Melog 主题色一致：紫色进度条 + 灰色次要信息）::
+样式（新设计，终端下与 Melog 主题色一致：紫→粉逐格渐变进度条 + 青色计数
++ 白色读数 + 黄色速率 + 灰色次要信息）::
 
-    train ████████████░░░░░░░░░░  55.0% 110/200 0:03<0:03 33.3it/s loss=0.215
+    [110/200] loss=0.2153 ━━━━━━━━━━━━────────────  55.0% [0:03<0:03 33.3it/s]
+
+各段定宽右对齐：数值位数变化不改变行宽，尾部（条形图/百分比/耗时）
+逐帧位置稳定不抖动。
 
 每帧以 ``\\r`` 结尾：终端原地重绘；若标准输入输出已被 Mirror 接管，
 日志文件里也保持同一行进度条（就地刷新、节流落盘，见 melog.mirror）。
@@ -25,19 +29,33 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 __all__ = ["tqdm"]
 
 BAR_WIDTH = 24  # 进度条字符宽度
-_FILL, _EMPTY = "█", "░"
+_FILL, _EMPTY = "━", "─"  # 横线字符：垂直居中、细条、相邻格无缝拼接
 
-# Melog 主题色（与 Web 面板 accent 一致的紫色）+ 次要信息灰
-_ACCENT = "\x1b[38;2;168;85;247m"
+# Melog 主题色（与 Web 面板 accent 一致的紫色）+ 分段点缀色
+_ACCENT = "\x1b[38;2;168;85;247m"        # 紫色：百分比
+_GRAD_FROM = (168, 85, 247)              # 渐变起点：主题紫
+_GRAD_TO = (236, 72, 153)                # 渐变末端：粉
 _ACCENT_BOLD = "\x1b[1;38;2;168;85;247m"
-_BOLD = "\x1b[1m"
+_BOLD_WHITE = "\x1b[1;38;2;230;233;238m"
+_WHITE = "\x1b[38;2;230;233;238m"
+_CYAN = "\x1b[38;2;97;214;214m"          # [n/total] 计数
+_YELLOW = "\x1b[38;2;250;204;21m"        # 速率
 _DIM = "\x1b[38;2;128;134;145m"
+_BAR_EMPTY = "\x1b[38;2;70;74;80m"
 _RESET = "\x1b[0m"
+
+
+def _is_tty(stream) -> bool:
+    """输出流是否为终端（颜色 / 光标控制只在真实终端启用）。"""
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def _fmt_clock(seconds: float) -> str:
@@ -49,12 +67,15 @@ def _fmt_clock(seconds: float) -> str:
 
 
 def _fmt_value(value: Any) -> str:
-    """postfix 指标值：浮点 4 位有效数字，其余原样。"""
+    """postfix 指标值：常规范围浮点固定 4 位小数（宽度恒定、小数点对齐），
+    过大 / 过小退化为 4 位有效数字，其余原样。"""
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
+        if 1e-2 <= abs(value) < 1e4:
+            return f"{value:.4f}"
         return f"{value:.4g}"
     return str(value)
 
@@ -118,12 +139,21 @@ class tqdm:
         self.colour = colour
         self.n = 0
         self.postfix: dict = {}
+        self._value_w: Dict[str, int] = {}  # 各指标值的历史最宽字符数（定宽右对齐用）
 
         self._t0 = time.monotonic()
         self._last_render = 0.0
         self._rendered_len = 0
         self._closed = False
+        self._cursor_hidden = False
         if not disable:
+            # 终端块状光标会压在行首字符上（\r 后光标停在 0 列），先隐藏，
+            # close 时恢复（与 tqdm 行为一致）
+            stream = self._stream()
+            if _is_tty(stream):
+                stream.write("\x1b[?25l")
+                stream.flush()
+                self._cursor_hidden = True
             self.render()
 
     # ------------------------------------------------------------ tqdm 兼容
@@ -145,7 +175,7 @@ class tqdm:
             self.render()
 
     def set_postfix(self, ordered_dict: Optional[dict] = None, **kwargs: Any) -> None:
-        """更新行尾指标（如 loss=0.21），键相同时覆盖。"""
+        """更新指标（如 loss=0.21），键相同时覆盖。"""
         if ordered_dict:
             self.postfix.update(ordered_dict)
         if kwargs:
@@ -178,6 +208,9 @@ class tqdm:
             stream.write("\n")
         else:
             stream.write("\r" + " " * self._rendered_len + "\r")
+        if self._cursor_hidden:
+            self._cursor_hidden = False
+            stream.write("\x1b[?25h")
         stream.flush()
 
     def __enter__(self) -> "tqdm":
@@ -189,6 +222,7 @@ class tqdm:
     def __iter__(self):
         if self.disable:
             yield from self.iterable
+            self.close()
             return
         for obj in self.iterable:
             yield obj
@@ -203,10 +237,7 @@ class tqdm:
         """主题色开关：显式指定优先，否则仅终端 TTY 启用（重定向为纯文本）。"""
         if self.colour is not None:
             return self.colour
-        try:
-            return bool(stream.isatty())
-        except (AttributeError, ValueError, OSError):
-            return False
+        return _is_tty(stream)
 
     def render(self) -> None:
         """把当前状态渲染为一行并以 \\r 结尾输出（终端原地重绘）。
@@ -225,7 +256,12 @@ class tqdm:
     def _format(self, use_color: bool) -> Tuple[str, str]:
         """渲染当前状态，返回 (终端行[含颜色码], 纯文本行)。
 
-        进度条的填充/剩余两段直接拼接为一段（中间无空格），仅颜色不同。
+        布局：[n/total] 最前，指标随后，条形图/百分比/[耗时<剩余 速率]
+        殿后；desc 提供时置于行首。各段定宽：n 右对齐到 total 宽度、
+        百分比固定宽、指标值右对齐到各自历史最宽宽度，因此数值位数
+        变化不引起行宽摆动，尾部逐帧位置稳定（仅出现更宽数值时整体
+        右移一次）。进度条的填充/剩余两段直接拼接为一段（中间无空格），
+        仅颜色不同。
         """
         def seg(text: str, code: str = "") -> Tuple[str, str]:
             if not text:
@@ -237,31 +273,73 @@ class tqdm:
         elapsed = time.monotonic() - self._t0
         parts: List[Tuple[str, str]] = []
         if self.desc:
-            parts.append(seg(str(self.desc), _BOLD))
+            parts.append(seg(str(self.desc), _BOLD_WHITE))
 
         rate = self.n / elapsed if elapsed > 0 and self.n > 0 else 0.0
+        postfix = ("", "")
+        if self.postfix:
+            plain_cells = []
+            color_cells = []
+            for k, v in self.postfix.items():
+                val = _fmt_value(v)
+                w = self._value_w.get(k, 0)
+                if len(val) > w:
+                    w = len(val)
+                    self._value_w[k] = w
+                val = val.rjust(w)
+                plain_cells.append(f"{k}={val}")
+                # 指标名灰、数值白，视觉上把名字与读数分开
+                color_cells.append(f"{_DIM}{k}={_RESET}{_WHITE}{val}{_RESET}")
+            if not use_color:
+                color_cells = plain_cells
+            postfix = (" ".join(color_cells), " ".join(plain_cells))
+
+        time_part = _fmt_clock(elapsed)
+        if self.total and rate > 0:
+            time_part += f"<{_fmt_clock((self.total - self.n) / rate)}"
+        if rate >= 1:
+            rate_part = f"{rate:.1f}{self.unit}/s"
+        elif rate > 0:
+            rate_part = f"{1 / rate:.1f}s/{self.unit}"
+        else:
+            rate_part = ""
+
+        # 尾段 [耗时<剩余 + 速率]：时间灰、速率黄，拆两段拼回同一对中括号
+        if rate_part:
+            tail = [seg(f"[{time_part}", _DIM), seg(f"{rate_part}]", _YELLOW)]
+        else:
+            tail = [seg(f"[{time_part}]", _DIM)]
+
         if self.total:
             frac = min(max(self.n / self.total, 0.0), 1.0)
             filled = int(frac * BAR_WIDTH)
-            bar = seg(_FILL * filled, _ACCENT)[0] + seg(_EMPTY * (BAR_WIDTH - filled), _DIM)[0]
+            bar = self._render_bar(filled, use_color)
+            n_str = str(self.n).rjust(len(str(self.total)))
+            parts.append(seg(f"[{n_str}/{self.total}]", _CYAN))
+            parts.append(postfix)
             parts.append((bar, _FILL * filled + _EMPTY * (BAR_WIDTH - filled)))
-            parts.append(seg(f"{100 * frac:.1f}%", _ACCENT_BOLD))
-            parts.append(seg(f"{self.n}/{self.total}"))
-            if rate > 0:
-                parts.append(seg(f"{_fmt_clock(elapsed)}<{_fmt_clock((self.total - self.n) / rate)}", _DIM))
-            else:
-                parts.append(seg(_fmt_clock(elapsed), _DIM))
+            parts.append(seg(f"{100 * frac:5.1f}%", _ACCENT_BOLD))
         else:
-            parts.append(seg(f"{self.n}{self.unit}"))
-            parts.append(seg(_fmt_clock(elapsed), _DIM))
+            parts.append(seg(f"[{self.n}{self.unit}]", _CYAN))
+            parts.append(postfix)
+        parts.extend(tail)
 
-        if rate >= 1:
-            parts.append(seg(f"{rate:.1f}{self.unit}/s", _DIM))
-        elif rate > 0:
-            parts.append(seg(f"{1 / rate:.1f}s/{self.unit}", _DIM))
-
-        if self.postfix:
-            parts.append(seg(" ".join(f"{k}={_fmt_value(v)}" for k, v in self.postfix.items())))
         drop_empty = lambda p: bool(p[0])  # noqa: E731  # 空片段不占位，避免多余空格
         kept = [p for p in parts if drop_empty(p)]
         return " ".join(p[0] for p in kept), " ".join(p[1] for p in kept)
+
+    @staticmethod
+    def _render_bar(filled: int, use_color: bool) -> str:
+        """进度条本体：填充段逐格做紫→粉线性插值（无色块台阶），剩余轨道深灰。"""
+        if not use_color:
+            return _FILL * filled + _EMPTY * (BAR_WIDTH - filled)
+        out = []
+        for i in range(filled):
+            t = i / (filled - 1) if filled > 1 else 0.0
+            r, g, b = (round(s + (e - s) * t) for s, e in zip(_GRAD_FROM, _GRAD_TO))
+            out.append(f"\x1b[38;2;{r};{g};{b}m{_FILL}")
+        if filled:
+            out.append(_RESET)
+        if filled < BAR_WIDTH:
+            out.append(f"{_BAR_EMPTY}{_EMPTY * (BAR_WIDTH - filled)}{_RESET}")
+        return "".join(out)

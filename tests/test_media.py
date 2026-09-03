@@ -213,82 +213,82 @@ def test_media_view_loaded_switch(tmp_path):
 
 # ---------------------------------------------------------------- Melog 接口
 @pytest.fixture
-def mlog(tmp_path):
+def logger(tmp_path):
     lg = Melog(project="m", output_dir=str(tmp_path), enable_web=False)
     yield lg
     lg.finish()
 
 
-def test_log_image_attaches_to_last_log_position(mlog):
-    mlog.log({"loss": 1.0}, epoch=2, step=7)
-    mlog.log_image("pred", np.zeros((4, 4), dtype=np.uint8))
-    entries = mlog.media.snapshot()["image"]["pred"]
+def test_log_image_attaches_to_last_log_position(logger):
+    logger.log({"loss": 1.0}, epoch=2, step=7)
+    logger.log_image("pred", np.zeros((4, 4), dtype=np.uint8))
+    entries = logger.media.snapshot()["image"]["pred"]
     assert entries[0]["step"] == 7 and entries[0]["epoch"] == 2
     # 不推进 step 计数
-    mlog.log({"loss": 2.0})
-    assert mlog.store.snapshot()["loss"][-1]["step"] == 8
+    logger.log({"loss": 2.0})
+    assert logger.store.snapshot()["loss"][-1]["step"] == 8
 
 
-def test_log_media_explicit_position_and_files(mlog):
-    mlog.log({"loss": 1.0})
+def test_log_media_explicit_position_and_files(logger):
+    logger.log({"loss": 1.0})
     img = np.full((3, 3, 3), 200, dtype=np.uint8)
     audio = np.zeros(100, dtype=np.float64)
-    mlog.log_image("sample/a", img, step=42, epoch=1)
-    mlog.log_audio("sample/a", audio, sr=8000, step=42, epoch=1)
+    logger.log_image("sample/a", img, step=42, epoch=1)
+    logger.log_audio("sample/a", audio, sr=8000, step=42, epoch=1)
 
-    media_root = mlog.run_dir / "media"
+    media_root = logger.run_dir / "media"
     assert (media_root / "image/sample/a/000000042.png").is_file()
     assert (media_root / "audio/sample/a/000000042.wav").is_file()
 
-    recs = [json.loads(l) for l in mlog._log_file.read_text(encoding="utf-8").splitlines()]
+    recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
     img_rec, aud_rec = recs[-2], recs[-1]
     assert img_rec == {"type": "image", "metric": "sample/a", "step": 42, "epoch": 1,
                        "file": "media/image/sample/a/000000042.png"}
     assert aud_rec["type"] == "audio" and aud_rec["sr"] == 8000
 
-    snap = mlog.media.snapshot()
+    snap = logger.media.snapshot()
     assert snap["image"]["sample/a"][0]["file"] == "media/image/sample/a/000000042.png"
     assert snap["audio"]["sample/a"][0]["sr"] == 8000
 
 
-def test_log_media_before_any_log_defaults_to_zero(mlog):
-    mlog.log_image("early", np.zeros((2, 2), dtype=np.uint8))
-    entries = mlog.media.snapshot()["image"]["early"]
+def test_log_media_before_any_log_defaults_to_zero(logger):
+    logger.log_image("early", np.zeros((2, 2), dtype=np.uint8))
+    entries = logger.media.snapshot()["image"]["early"]
     assert entries[0]["step"] == 0 and "epoch" not in entries[0]
 
 
-def test_log_media_caption_roundtrip(mlog):
+def test_log_media_caption_roundtrip(logger):
     """caption 随记录贯通：journal / 内存索引 / 历史解析；无配文则不写该字段。"""
-    mlog.log_image("cap/img", np.zeros((2, 2), dtype=np.uint8),
+    logger.log_image("cap/img", np.zeros((2, 2), dtype=np.uint8),
                      step=1, epoch=0, caption="第一张\n说明文字")
-    mlog.log_image("cap/img", np.ones((2, 2), dtype=np.uint8), step=2)
-    mlog.log_audio("cap/tone", np.zeros(10), sr=8000, step=1, caption="转写文本")
+    logger.log_image("cap/img", np.ones((2, 2), dtype=np.uint8), step=2)
+    logger.log_audio("cap/tone", np.zeros(10), sr=8000, step=1, caption="转写文本")
 
-    recs = [json.loads(l) for l in mlog._log_file.read_text(encoding="utf-8").splitlines()]
+    recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
     assert recs[-3]["caption"] == "第一张\n说明文字"
     assert "caption" not in recs[-2]  # 无配文的条目不带该字段
     assert recs[-1]["caption"] == "转写文本"
 
-    snap = mlog.media.snapshot()
+    snap = logger.media.snapshot()
     assert snap["image"]["cap/img"][0]["caption"] == "第一张\n说明文字"
     assert "caption" not in snap["image"]["cap/img"][1]
 
-    parsed = MediaLoader.parse(mlog._log_file)
+    parsed = MediaLoader.parse(logger._log_file)
     assert parsed["image"]["cap/img"][0]["caption"] == "第一张\n说明文字"
     assert "caption" not in parsed["image"]["cap/img"][1]
     assert parsed["audio"]["cap/tone"][0]["caption"] == "转写文本"
 
 
-def test_log_media_path_copy(mlog, tmp_path):
+def test_log_media_path_copy(logger, tmp_path):
     from PIL import Image
 
     src = tmp_path / "in.png"
     Image.new("L", (4, 4)).save(src)
-    mlog.log_image("copied", src)
-    assert (mlog.run_dir / "media/image/copied/000000000.png").is_file()
+    logger.log_image("copied", src)
+    assert (logger.run_dir / "media/image/copied/000000000.png").is_file()
 
 
-def test_log_media_bad_name_rejected(mlog):
+def test_log_media_bad_name_rejected(logger):
     from melog.media import sanitize_name
 
     with pytest.raises(ValueError):

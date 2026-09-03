@@ -208,11 +208,9 @@ def test_group_feed_partial_scalars():
 def test_batch_metric_with_melog(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"acc": PairAcc()})
-    with lg.train(total=2) as bar:
-        for _ in range(2):
-            group.feed(logits=[0.9, 0.2], labels=[1, 0])
-            lg.log_group(group, reset=True)
-            bar.update(1)
+    for _ in lg.progress(range(2)):
+        group.feed(logits=[0.9, 0.2], labels=[1, 0])
+        lg.log_group(group, reset=True)
     lg.finish()
 
     path = next((tmp_path / "t").glob("**/metrics.melog"))
@@ -311,10 +309,10 @@ def test_group_getitem_contains_len():
 def test_log_group_records_and_resets(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
-    with lg.train(total=4) as bar:
-        for _ in range(2):
-            group.update(loss=1.0, acc=0.5)
-            lg.log_group(group, reset=True)
+    bar = lg.progress(range(4))  # 建条但不迭代
+    for _ in range(2):
+        group.update(loss=1.0, acc=0.5)
+        lg.log_group(group, reset=True)
     assert bar.n == 0  # epoch 级记录默认不推进进度条
     lg.finish()
 

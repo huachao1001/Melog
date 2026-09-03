@@ -1,6 +1,17 @@
 """Melog 包入口。"""
 
-from .core import Melog, tqdm
+from .core import (
+    Melog,
+    current,
+    finish,
+    init,
+    log,
+    log_audio,
+    log_group,
+    log_image,
+    set_colors,
+    tqdm,
+)
 from .metrics import (
     Accuracy,
     AUC,
@@ -23,6 +34,14 @@ __version__ = "0.1.0"
 __all__ = [
     "Melog",
     "tqdm",
+    "init",
+    "current",
+    "log",
+    "log_group",
+    "log_image",
+    "log_audio",
+    "set_colors",
+    "finish",
     "Metric",
     "BatchMetric",
     "MetricGroup",

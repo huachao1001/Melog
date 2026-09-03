@@ -7,8 +7,8 @@
 - 音频页签：sample/tone 卡片——播放随训练由沙哑变纯净的音色
 
 媒体接口：
-    mlog.log_image("名字", 图片路径/PIL/numpy/torch, step=?, epoch=?)
-    mlog.log_audio("名字", 音频路径/numpy/torch, sr=采样率, step=?, epoch=?)
+    logger.log_image("名字", 图片路径/PIL/numpy/torch, step=?, epoch=?)
+    logger.log_audio("名字", 音频路径/numpy/torch, sr=采样率, step=?, epoch=?)
 step/epoch 缺省时自动附着到最近一次 log() 的位置（本示例即这种用法）。
 
 Ctrl+C 停止。
@@ -53,29 +53,28 @@ def make_audio(step: int, total: int, sr: int = 22050) -> np.ndarray:
 
 
 def main():
-    mlog = Melog(project="demo-media", web_port=8666)
-    print(f"Web 可视化: {mlog._web.url if mlog._web else '未启用'} （页签切换 曲线/图像/音频，Ctrl+C 退出）")
+    logger = Melog(project="demo-media", web_port=8666)
+    print(f"Web 可视化: {logger._web.url if logger._web else '未启用'} （页签切换 曲线/图像/音频，Ctrl+C 退出）")
 
     total = EPOCHS * STEPS
     try:
-        with mlog.train(total=total, description="media-demo") as bar:
-            for epoch in range(EPOCHS):
-                for step in range(STEPS):
-                    g = epoch * STEPS + step
-                    loss = 1.6 * math.exp(-g / 80) + 0.2
-                    mlog.log({"loss": loss}, epoch=epoch, step=step)
-                    if g % IMG_EVERY == 0:
-                        # caption：随图显示的配文（textContent 渲染，支持换行）
-                        mlog.log_image("sample/grid", make_image(g, total),
-                                         caption=f"亮斑位置 t={g / total:.2f}（应逐渐移向中心）")
-                    if g % AUD_EVERY == 0:
-                        mlog.log_audio("sample/tone", make_audio(g, total), sr=22050,
-                                         caption=f"纯净度 {g / total:.0%}，噪声已衰减")
-                    bar.update(1)
-                    time.sleep(INTERVAL)
+        for epoch in range(EPOCHS):
+            # tqdm 风格：包裹可迭代对象即自动推进，log() 指标实时显示在条上
+            for step in logger.progress(range(STEPS)):
+                g = epoch * STEPS + step
+                loss = 1.6 * math.exp(-g / 80) + 0.2
+                logger.log({"loss": loss}, epoch=epoch)
+                if g % IMG_EVERY == 0:
+                    # caption：随图显示的配文（textContent 渲染，支持换行）
+                    logger.log_image("sample/grid", make_image(g, total),
+                                   caption=f"亮斑位置 t={g / total:.2f}（应逐渐移向中心）")
+                if g % AUD_EVERY == 0:
+                    logger.log_audio("sample/tone", make_audio(g, total), sr=22050,
+                                   caption=f"纯净度 {g / total:.0%}，噪声已衰减")
+                time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")
-        mlog.finish()
+        logger.finish()
         return
 
     # 保持 Web 服务运行，方便在浏览器里拖滑杆回放图像/音频；历史查看也可用: melog <run_dir>
@@ -84,7 +83,7 @@ def main():
         input()
     except (EOFError, KeyboardInterrupt):
         pass
-    mlog.finish()
+    logger.finish()
 
 
 if __name__ == "__main__":

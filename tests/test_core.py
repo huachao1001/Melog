@@ -59,10 +59,10 @@ def test_reduce_invalid_type():
 
 
 # ---------------------------------------------------------------- Melog
-def test_log_records_and_persists(tmp_path):
+def test_scalar_records_and_persists(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False, flush_every=2)
     for step in range(5):
-        lg.log({"loss": 1.0 / (step + 1)}, advance=1)
+        lg.scalar({"loss": 1.0 / (step + 1)}, advance=1)
     lg.finish()
 
     lines = (tmp_path / "t").glob("**/metrics.melog")
@@ -72,8 +72,8 @@ def test_log_records_and_persists(tmp_path):
     assert records[0] == {"metric": "loss", "step": 0, "value": 1.0}
 
 
-def test_log_returns_merged(logger):
-    out = logger.log({"loss": 0.25})
+def test_scalar_returns_merged(logger):
+    out = logger.scalar({"loss": 0.25})
     assert out == {"loss": 0.25}
 
 
@@ -91,8 +91,8 @@ def test_set_colors_merges_and_persists(tmp_path):
 
 
 def test_step_auto_increment(logger):
-    logger.log({"a": 1})
-    logger.log({"a": 2})
+    logger.scalar({"a": 1})
+    logger.scalar({"a": 2})
     assert logger.store.snapshot()["a"] == [
         {"step": 0, "value": 1.0},
         {"step": 1, "value": 2.0},
@@ -100,17 +100,17 @@ def test_step_auto_increment(logger):
 
 
 def test_explicit_step(logger):
-    logger.log({"a": 1}, step=100)
+    logger.scalar({"a": 1}, step=100)
     assert logger.store.snapshot()["a"][0]["step"] == 100
 
 
 # ---------------------------------------------------------------- epoch 支持
-def test_log_with_epoch_and_step(logger):
+def test_scalar_with_epoch_and_step(logger):
     """epoch + 当前 epoch 内 step：全局 x 跨 epoch 连续，记录携带 epoch。"""
     for step in range(3):
-        logger.log({"a": step}, epoch=0, step=step)
+        logger.scalar({"a": step}, epoch=0, step=step)
     for step in range(3):
-        logger.log({"a": 10 + step}, epoch=1, step=step)
+        logger.scalar({"a": 10 + step}, epoch=1, step=step)
     snap = logger.store.snapshot()["a"]
     assert [p["step"] for p in snap] == [0, 1, 2, 3, 4, 5]
     assert [p["epoch"] for p in snap] == [0, 0, 0, 1, 1, 1]
@@ -119,9 +119,9 @@ def test_log_with_epoch_and_step(logger):
 def test_epoch_only_internal_step_count(logger):
     """只传 epoch 不传 step：每个 epoch 内部从 0 重新计步。"""
     for _ in range(3):
-        logger.log({"a": 1}, epoch=0)
+        logger.scalar({"a": 1}, epoch=0)
     for _ in range(2):
-        logger.log({"a": 2}, epoch=1)
+        logger.scalar({"a": 2}, epoch=1)
     snap = logger.store.snapshot()["a"]
     assert [(p["step"], p["epoch"]) for p in snap] == [
         (0, 0), (1, 0), (2, 0), (3, 1), (4, 1),
@@ -130,23 +130,23 @@ def test_epoch_only_internal_step_count(logger):
 
 def test_epoch_sticky_after_first_call(logger):
     """epoch 粘滞：只传一次后，后续不传也记录同一 epoch。"""
-    logger.log({"a": 1}, epoch=7, step=0)
-    logger.log({"a": 2})
+    logger.scalar({"a": 1}, epoch=7, step=0)
+    logger.scalar({"a": 2})
     snap = logger.store.snapshot()["a"]
     assert [(p["step"], p["epoch"]) for p in snap] == [(0, 7), (1, 7)]
 
 
 def test_explicit_epoch_step_syncs_internal_counter(logger):
     """显式传 step 后再省略，内部计数从显式值接续。"""
-    logger.log({"a": 1}, epoch=0, step=10)
-    logger.log({"a": 2}, epoch=0)
+    logger.scalar({"a": 1}, epoch=0, step=10)
+    logger.scalar({"a": 2}, epoch=0)
     snap = logger.store.snapshot()["a"]
     assert [p["step"] for p in snap] == [10, 11]
 
 
 def test_epoch_records_persist_with_epoch_key(logger):
     """启用 epoch 时 JSONL 记录带 epoch 字段。"""
-    logger.log({"a": 1.5}, epoch=2, step=5)
+    logger.scalar({"a": 1.5}, epoch=2, step=5)
     logger.finish()
     path = next(logger.run_dir.parent.glob("**/metrics.melog"))
     rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
@@ -155,7 +155,7 @@ def test_epoch_records_persist_with_epoch_key(logger):
 
 def test_no_epoch_records_omit_epoch_key(logger):
     """未启用 epoch 时 JSONL 记录不带 epoch 字段（兼容旧格式）。"""
-    logger.log({"a": 1.0})
+    logger.scalar({"a": 1.0})
     logger.finish()
     path = next(logger.run_dir.parent.glob("**/metrics.melog"))
     rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
@@ -176,12 +176,12 @@ def test_log_group_with_epoch(logger):
 def test_progress_returns_bar(logger):
     bar = logger.progress(range(10))
     for _ in bar:
-        logger.log({"loss": 0.1})
+        logger.scalar({"loss": 0.1})
     assert bar.n == 10  # 迭代自动推进
 
 
 def test_finish_idempotent(logger):
-    logger.log({"a": 1})
+    logger.scalar({"a": 1})
     logger.finish()
     logger.finish()  # 不应抛异常
 
@@ -201,7 +201,7 @@ def test_global_shared_instance(tmp_path):
     lg = pkg.init(project="g", output_dir=str(tmp_path), enable_web=False)
     try:
         assert pkg.current() is lg
-        pkg.log({"a": 1.5}, epoch=0, step=3)
+        pkg.scalar({"a": 1.5}, epoch=0, step=3)
         pkg.set_colors({"loss": "#123456"})
         assert lg.store.snapshot()["a"] == [{"step": 3, "value": 1.5, "epoch": 0}]
         assert lg._colors == {"loss": "#123456"}
@@ -212,7 +212,7 @@ def test_global_shared_instance(tmp_path):
     with pytest.raises(RuntimeError):
         pkg.current()
     with pytest.raises(RuntimeError):
-        pkg.log({"a": 1.0})
+        pkg.scalar({"a": 1.0})
 
 
 def test_global_reinit_switches_active_instance(tmp_path):
@@ -223,9 +223,9 @@ def test_global_reinit_switches_active_instance(tmp_path):
     second = pkg.init(project="g2", output_dir=str(tmp_path), enable_web=False)
     try:
         assert pkg.current() is second
-        pkg.log({"a": 1.0})
+        pkg.scalar({"a": 1.0})
         assert second.store.snapshot()["a"] and not first.store.snapshot()
-        first.log({"b": 2.0})  # 旧实例显式调用不受影响
+        first.scalar({"b": 2.0})  # 旧实例显式调用不受影响
         assert first.store.snapshot()["b"][0]["value"] == 2.0
     finally:
         pkg.finish()  # 收尾活动实例（second）

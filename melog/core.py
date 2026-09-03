@@ -36,7 +36,7 @@ class Melog:
         >>> logger = Melog(project="demo", enable_web=True)
         >>> for step in logger.progress(range(100)):
         ...     loss = 1.0 / (step + 1)
-        ...     logger.log({"loss": loss, "lr": 1e-3})
+        ...     logger.scalar({"loss": loss, "lr": 1e-3})
     """
 
     def __init__(
@@ -133,7 +133,7 @@ class Melog:
         用法与 tqdm.tqdm 一致::
 
             for batch in logger.progress(loader):
-                logger.log({"loss": loss})   # 指标实时显示在进度条上
+                logger.scalar({"loss": loss})   # 指标实时显示在进度条上
 
         进度条布局：[n/total] 最前，指标其后，条形图/百分比/耗时殿后；
         description 提供时显示在行首（默认不显示）。total 缺省时自动取
@@ -149,7 +149,7 @@ class Melog:
         return self._register_progress(bar)
 
     def _register_progress(self, bar: tqdm) -> tqdm:
-        """登记当前进度条（log() 的 postfix/advance 作用其上），close 后自动解除。"""
+        """登记当前进度条（scalar() 的 postfix/advance 作用其上），close 后自动解除。"""
         self._progress = bar
         original_close = bar.close
 
@@ -162,7 +162,7 @@ class Melog:
         return bar
 
     # ------------------------------------------------------------------ 记录指标
-    def log(
+    def scalar(
         self,
         metrics: Dict[str, Union[float, int, Any]],
         step: Optional[int] = None,
@@ -182,7 +182,7 @@ class Melog:
             epoch: 当前 epoch 序号，曲线图据此标注 epoch 分界；
                 缺省沿用上一次传入的值，从未传入则不记录 epoch。
             advance: 额外推进进度条的步数（progress() 迭代每次已自动
-                推进 1，缺省 0；仅一个迭代内多次 log() 等场景需要传入）。
+                推进 1，缺省 0；仅一个迭代内多次 scalar() 等场景需要传入）。
             commit: 是否推进内部 step 计数。
         Returns:
             合并后的指标（rank>0 也返回，便于本地打印）。
@@ -218,10 +218,11 @@ class Melog:
         return merged
 
     # 兼容 wandb 风格别名
-    log_metrics = log
+    # 兼容 wandb 风格别名
+    log_metrics = scalar
 
     # ------------------------------------------------------------------ 记录媒体
-    def log_image(
+    def image(
         self,
         name: str,
         data: Any,
@@ -238,13 +239,13 @@ class Melog:
             name: 图像名，支持 "train/sample" 层级命名（页面按名建卡片）。
             data: 文件路径 / PIL.Image / numpy / torch 张量
                 （(H,W) 灰度或 (H,W,C)，C=1/3/4；浮点自动映射 0-255）。
-            step / epoch: 缺省附着到最近一次 log() 的位置，不推进 step 计数。
+            step / epoch: 缺省附着到最近一次 scalar() 的位置，不推进 step 计数。
             caption: 配文，随图显示在卡片上（如样本说明、预测对比）。
         """
         self._log_media("image", name, data, step=step, epoch=epoch, caption=caption,
                         save=lambda out_dir, stem: save_image(data, out_dir, stem))
 
-    def log_audio(
+    def audio(
         self,
         name: str,
         data: Any,
@@ -260,7 +261,7 @@ class Melog:
             data: 文件路径（wav/mp3/flac 等按原格式复制）/ numpy / torch
                 波形（(N,) 单声道或 (N, 声道数)；浮点按 [-1,1] 裁剪）。
             sr: 采样率（data 为路径时忽略，沿用文件本身格式）。
-            step / epoch: 缺省附着到最近一次 log() 的位置，不推进 step 计数。
+            step / epoch: 缺省附着到最近一次 scalar() 的位置，不推进 step 计数。
             caption: 配文，随音频显示在卡片上（如转写文本、听感说明）。
         """
         self._log_media("audio", name, data, step=step, epoch=epoch, sr=sr, caption=caption,
@@ -287,7 +288,7 @@ class Melog:
             self._push_web_media(kind, name, x, e, rel, sr=sr, caption=caption)
 
     def _media_position(self, step: Optional[int], epoch: Optional[int]):
-        """媒体条目的展示位置：缺省附着最近一次 log()，不推进任何计数器。"""
+        """媒体条目的展示位置：缺省附着最近一次 scalar()，不推进任何计数器。"""
         if step is None and epoch is None:
             return self._last_x, self._last_epoch
         e = epoch if epoch is not None else self._last_epoch
@@ -325,7 +326,7 @@ class Melog:
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """
         values = group.compute()
-        result = self.log(values, step=step, epoch=epoch, advance=advance)
+        result = self.scalar(values, step=step, epoch=epoch, advance=advance)
         if reset:
             group.reset()
         return result
@@ -433,21 +434,21 @@ def current() -> "Melog":
 def init(**kwargs: Any) -> Melog:
     """创建并激活全局共享的 Melog 实例，参数与 Melog(...) 完全一致。
 
-    入口处调用一次，之后项目任意位置可直接使用模块级 melog.log() 等接口。
+    入口处调用一次，之后项目任意位置可直接使用模块级 melog.scalar() 等接口。
     再次调用会用新实例替换当前活动实例。
     """
     return Melog(**kwargs)
 
 
-def log(
+def scalar(
     metrics: Dict[str, Union[float, int, Any]],
     step: Optional[int] = None,
     epoch: Optional[int] = None,
     advance: int = 1,
     commit: bool = True,
 ) -> Dict[str, float]:
-    """模块级便捷接口：等价于 ``current().log(...)``。"""
-    return current().log(metrics, step=step, epoch=epoch, advance=advance, commit=commit)
+    """模块级便捷接口：等价于 ``current().scalar(...)``。"""
+    return current().scalar(metrics, step=step, epoch=epoch, advance=advance, commit=commit)
 
 
 def log_group(
@@ -461,18 +462,18 @@ def log_group(
     return current().log_group(group, step=step, epoch=epoch, advance=advance, reset=reset)
 
 
-def log_image(
+def image(
     name: str,
     data: Any,
     step: Optional[int] = None,
     epoch: Optional[int] = None,
     caption: Optional[str] = None,
 ) -> None:
-    """模块级便捷接口：等价于 ``current().log_image(...)``。"""
-    current().log_image(name, data, step=step, epoch=epoch, caption=caption)
+    """模块级便捷接口：等价于 ``current().image(...)``。"""
+    current().image(name, data, step=step, epoch=epoch, caption=caption)
 
 
-def log_audio(
+def audio(
     name: str,
     data: Any,
     sr: int = 22050,
@@ -480,8 +481,8 @@ def log_audio(
     epoch: Optional[int] = None,
     caption: Optional[str] = None,
 ) -> None:
-    """模块级便捷接口：等价于 ``current().log_audio(...)``。"""
-    current().log_audio(name, data, sr=sr, step=step, epoch=epoch, caption=caption)
+    """模块级便捷接口：等价于 ``current().audio(...)``。"""
+    current().audio(name, data, sr=sr, step=step, epoch=epoch, caption=caption)
 
 
 def set_colors(colors: Dict[str, str]) -> None:

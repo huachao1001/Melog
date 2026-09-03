@@ -29,7 +29,7 @@ logger = Melog(project="my-exp", web_port=8666)
 
 for step in logger.progress(range(1000)):     # tqdm 风格：自动推进，无需手动 update
     loss = train_one_step()
-    logger.log({"loss": loss, "lr": 1e-3})    # 记录 + 刷新进度条指标 + 推送 Web
+    logger.scalar({"loss": loss, "lr": 1e-3})    # 记录 + 刷新进度条指标 + 推送 Web
 
 logger.finish()   # 落盘剩余指标并停止 Web 服务
 ```
@@ -47,8 +47,8 @@ mlog = melog.init(project="my-exp")     # 或 melog.Melog(...)，自动成为全
 
 # 任意其他模块中：
 import melog
-melog.log({"loss": 0.5}, epoch=epoch, step=step)
-melog.log_image("sample", img)
+melog.scalar({"loss": 0.5}, epoch=epoch, step=step)
+melog.image("sample", img)
 melog.finish()                          # 训练结束收尾
 ```
 
@@ -58,14 +58,14 @@ melog.finish()                          # 训练结束收尾
 
 ## 曲线上体现 epoch
 
-`log()` 可传入 `epoch` 与当前 epoch 内的 `step`，Web 曲线会在每个 epoch 起点画分界虚线
+`scalar()` 可传入 `epoch` 与当前 epoch 内的 `step`，Web 曲线会在每个 epoch 起点画分界虚线
 （标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`；两者都不传时内部自动统计 step，
 行为与旧版一致：
 
 ```python
 for epoch in range(epochs):
     for step in range(steps):
-        logger.log({"loss": loss, "lr": lr}, epoch=epoch, step=step)
+        logger.scalar({"loss": loss, "lr": lr}, epoch=epoch, step=step)
 ```
 
 - `epoch` 缺省时**粘滞沿用**上一次传入的值（整个 epoch 内只需传一次），从未传入则不记录 epoch
@@ -75,17 +75,17 @@ for epoch in range(epochs):
 ## 记录图像与音频
 
 除指标曲线外，Web 端 header 可在 **曲线 / 图像 / 音频** 三个页签间切换。图像与音频用
-`log_image` / `log_audio` 记录，Web 端按名字建卡片、滑杆按 step 回放（图像点击看原图，
+`image` / `audio` 记录，Web 端按名字建卡片、滑杆按 step 回放（图像点击看原图，
 音频在线播放）；文件自动落盘到 `run_dir/media/`，元数据随日志持久化，历史日志加载时
 媒体一并恢复：
 
 ```python
-logger.log({"loss": loss}, epoch=epoch, step=step)
-logger.log_image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
-logger.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
+logger.scalar({"loss": loss}, epoch=epoch, step=step)
+logger.image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
+logger.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
 ```
 
-- `step` / `epoch` 缺省时自动附着到**最近一次 `log()` 的位置**，不推进 step 计数
+- `step` / `epoch` 缺省时自动附着到**最近一次 `scalar()` 的位置**，不推进 step 计数
 - `caption="..."` 可为每条图像 / 音频配一段文字（如样本说明、转写文本），
   显示在卡片上、随滑杆切换；换行会被保留
 - 图像：`(H,W)` 灰度或 `(H,W,C)`（C=1/3/4），浮点自动映射 0-255，统一存为 PNG
@@ -119,7 +119,7 @@ for epoch in range(epochs):
 - `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
 - `Mean` / `Sum` / `Max` / `Min` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
 - `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
-- `logger.log_group(group, reset=True)` 等价于 `logger.log(group.compute()); group.reset()`
+- `logger.log_group(group, reset=True)` 等价于 `logger.scalar(group.compute()); group.reset()`
 
 ### 分类指标
 
@@ -228,15 +228,15 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 | `web_host` / `web_port` | `127.0.0.1:8666` | Web 监听地址 |
 | `enable_progress` | `True` | 启用控制台进度条 |
 | `reduce_op` | `"mean"` | 多 GPU 合并方式 |
-| `flush_every` | `1` | 每 N 次 log 落盘一次 |
+| `flush_every` | `1` | 每 N 次 scalar 落盘一次 |
 
 ### 主要方法
 
-- `log(metrics, step=None, epoch=None, advance=0)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
-- `log_image(name, data, step=None, epoch=None)` / `log_audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
-- `progress(iterable)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`log()` 指标实时显示在条上
+- `scalar(metrics, step=None, epoch=None, advance=0)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
+- `image(name, data, step=None, epoch=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
+- `progress(iterable)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上
 - `finish()` — 落盘并停止 Web 服务
-- 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.log(...)` 等可在任意位置直接调用（见上文）
+- 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.scalar(...)` 等可在任意位置直接调用（见上文）
 
 进度条显示的指标可通过环境变量 `MELOG_DISABLE_PROGRESS=1` 全局关闭。
 

@@ -25,7 +25,7 @@ def main():
             loss = 2.0 * math.exp(-g / 60) + 0.05 + 0.02 * math.sin(g / 7)
             acc = 1 - loss / 2.1
             # 传入 epoch，曲线上标注 epoch 分界
-            logger.log({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)}, epoch=epoch)
+            logger.scalar({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)}, epoch=epoch)
             time.sleep(0.03)
 
     logger.finish()

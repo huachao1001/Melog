@@ -212,7 +212,7 @@ def test_tqdm_color_on_tty_plain_on_pipe():
 
 
 def test_melog_progress_iterates_and_autoupdates(tmp_path):
-    """progress() 包裹可迭代对象：迭代自动推进，log() 指标显示在条尾。"""
+    """progress() 包裹可迭代对象：迭代自动推进，scalar() 指标显示在条尾。"""
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
@@ -228,12 +228,12 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
 
 
 def test_melog_progress_shows_log_postfix(tmp_path):
-    """progress() 期间 log() 的指标经 postfix 实时写进 console.log。"""
+    """progress() 期间 scalar() 的指标经 postfix 实时写进 console.log。"""
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
         for _ in logger.progress(range(2), description="train"):
-            logger.log({"loss": 0.5})
+            logger.scalar({"loss": 0.5})
     finally:
         logger.finish()
     log_path = next((tmp_path / "t").glob("**/console.log"))
@@ -266,13 +266,13 @@ def test_melog_progress_nesting_rejected(tmp_path):
 
 
 def test_melog_log_advance_opt_in(tmp_path):
-    """log(advance=N) 可选推进进度条；缺省 0（progress() 迭代已自动推进）。"""
+    """scalar(advance=N) 可选推进进度条；缺省 0（progress() 迭代已自动推进）。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
         bar = logger.progress(range(5))
-        logger.log({"loss": 1.0})
+        logger.scalar({"loss": 1.0})
         assert bar.n == 0
-        logger.log({"loss": 1.0}, advance=2)
+        logger.scalar({"loss": 1.0}, advance=2)
         assert bar.n == 2
     finally:
         logger.finish()
@@ -294,7 +294,7 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
     try:
         assert sys.stdout is not saved_stdout  # 已接管
         for _ in logger.progress(range(2), description="train"):
-            logger.log({"loss": 0.5})
+            logger.scalar({"loss": 0.5})
             print("step done")
     finally:
         logger.finish()

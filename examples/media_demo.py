@@ -7,9 +7,9 @@
 - 音频页签：sample/tone 卡片——播放随训练由沙哑变纯净的音色
 
 媒体接口：
-    logger.log_image("名字", 图片路径/PIL/numpy/torch, step=?, epoch=?)
-    logger.log_audio("名字", 音频路径/numpy/torch, sr=采样率, step=?, epoch=?)
-step/epoch 缺省时自动附着到最近一次 log() 的位置（本示例即这种用法）。
+    logger.image("名字", 图片路径/PIL/numpy/torch, step=?, epoch=?)
+    logger.audio("名字", 音频路径/numpy/torch, sr=采样率, step=?, epoch=?)
+step/epoch 缺省时自动附着到最近一次 scalar() 的位置（本示例即这种用法）。
 
 Ctrl+C 停止。
 """
@@ -59,17 +59,17 @@ def main():
     total = EPOCHS * STEPS
     try:
         for epoch in range(EPOCHS):
-            # tqdm 风格：包裹可迭代对象即自动推进，log() 指标实时显示在条上
+            # tqdm 风格：包裹可迭代对象即自动推进，scalar() 指标实时显示在条上
             for step in logger.progress(range(STEPS)):
                 g = epoch * STEPS + step
                 loss = 1.6 * math.exp(-g / 80) + 0.2
-                logger.log({"loss": loss}, epoch=epoch)
+                logger.scalar({"loss": loss}, epoch=epoch)
                 if g % IMG_EVERY == 0:
                     # caption：随图显示的配文（textContent 渲染，支持换行）
-                    logger.log_image("sample/grid", make_image(g, total),
+                    logger.image("sample/grid", make_image(g, total),
                                    caption=f"亮斑位置 t={g / total:.2f}（应逐渐移向中心）")
                 if g % AUD_EVERY == 0:
-                    logger.log_audio("sample/tone", make_audio(g, total), sr=22050,
+                    logger.audio("sample/tone", make_audio(g, total), sr=22050,
                                    caption=f"纯净度 {g / total:.0%}，噪声已衰减")
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:

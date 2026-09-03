@@ -219,22 +219,22 @@ def logger(tmp_path):
     lg.finish()
 
 
-def test_log_image_attaches_to_last_log_position(logger):
-    logger.log({"loss": 1.0}, epoch=2, step=7)
-    logger.log_image("pred", np.zeros((4, 4), dtype=np.uint8))
+def test_image_attaches_to_last_scalar_position(logger):
+    logger.scalar({"loss": 1.0}, epoch=2, step=7)
+    logger.image("pred", np.zeros((4, 4), dtype=np.uint8))
     entries = logger.media.snapshot()["image"]["pred"]
     assert entries[0]["step"] == 7 and entries[0]["epoch"] == 2
     # 不推进 step 计数
-    logger.log({"loss": 2.0})
+    logger.scalar({"loss": 2.0})
     assert logger.store.snapshot()["loss"][-1]["step"] == 8
 
 
-def test_log_media_explicit_position_and_files(logger):
-    logger.log({"loss": 1.0})
+def test_media_explicit_position_and_files(logger):
+    logger.scalar({"loss": 1.0})
     img = np.full((3, 3, 3), 200, dtype=np.uint8)
     audio = np.zeros(100, dtype=np.float64)
-    logger.log_image("sample/a", img, step=42, epoch=1)
-    logger.log_audio("sample/a", audio, sr=8000, step=42, epoch=1)
+    logger.image("sample/a", img, step=42, epoch=1)
+    logger.audio("sample/a", audio, sr=8000, step=42, epoch=1)
 
     media_root = logger.run_dir / "media"
     assert (media_root / "image/sample/a/000000042.png").is_file()
@@ -251,18 +251,18 @@ def test_log_media_explicit_position_and_files(logger):
     assert snap["audio"]["sample/a"][0]["sr"] == 8000
 
 
-def test_log_media_before_any_log_defaults_to_zero(logger):
-    logger.log_image("early", np.zeros((2, 2), dtype=np.uint8))
+def test_media_before_any_scalar_defaults_to_zero(logger):
+    logger.image("early", np.zeros((2, 2), dtype=np.uint8))
     entries = logger.media.snapshot()["image"]["early"]
     assert entries[0]["step"] == 0 and "epoch" not in entries[0]
 
 
-def test_log_media_caption_roundtrip(logger):
+def test_media_caption_roundtrip(logger):
     """caption 随记录贯通：journal / 内存索引 / 历史解析；无配文则不写该字段。"""
-    logger.log_image("cap/img", np.zeros((2, 2), dtype=np.uint8),
+    logger.image("cap/img", np.zeros((2, 2), dtype=np.uint8),
                      step=1, epoch=0, caption="第一张\n说明文字")
-    logger.log_image("cap/img", np.ones((2, 2), dtype=np.uint8), step=2)
-    logger.log_audio("cap/tone", np.zeros(10), sr=8000, step=1, caption="转写文本")
+    logger.image("cap/img", np.ones((2, 2), dtype=np.uint8), step=2)
+    logger.audio("cap/tone", np.zeros(10), sr=8000, step=1, caption="转写文本")
 
     recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
     assert recs[-3]["caption"] == "第一张\n说明文字"
@@ -279,16 +279,16 @@ def test_log_media_caption_roundtrip(logger):
     assert parsed["audio"]["cap/tone"][0]["caption"] == "转写文本"
 
 
-def test_log_media_path_copy(logger, tmp_path):
+def test_media_path_copy(logger, tmp_path):
     from PIL import Image
 
     src = tmp_path / "in.png"
     Image.new("L", (4, 4)).save(src)
-    logger.log_image("copied", src)
+    logger.image("copied", src)
     assert (logger.run_dir / "media/image/copied/000000000.png").is_file()
 
 
-def test_log_media_bad_name_rejected(logger):
+def test_media_bad_name_rejected(logger):
     from melog.media import sanitize_name
 
     with pytest.raises(ValueError):

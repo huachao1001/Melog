@@ -20,11 +20,10 @@ body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Micr
 /* 头部 */
 header { padding: 12px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
 header img { display: block; height: 36px; }
-.logo-wrap { position: relative; flex: none; }
+.logo-wrap { display: flex; align-items: center; gap: 8px; flex: none; }
 
-/* 连接状态徽章：叠加在 logo 右上角（绿=已连接，灰=未连接，红点仅表示断开） */
+/* 连接状态徽章：位于 logo 右侧（绿=已连接，灰=未连接，红点仅表示断开） */
 .conn {
-  position: absolute; right: -26px; top: -7px; z-index: 2;
   display: flex; align-items: center; gap: 4px;
   padding: 1px 8px; border-radius: 999px;
   font-size: 10px; line-height: 1.5; white-space: nowrap;
@@ -43,8 +42,8 @@ body.dark #themeBtn .icon-moon { display: none; }
 #logBtn { margin-left: auto; }
 
 /* 视图页签：曲线 / 图像 / 音频 */
-.views { display: flex; gap: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
-.view-tab { position: relative; border: none; background: none; padding: 6px 18px; font-size: 13px; color: var(--muted); border-radius: 8px; cursor: pointer; }
+.views { display: flex; gap: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; margin-left: 16px; }
+.view-tab { position: relative; border: none; background: none; padding: 6px 18px; font-size: 14px; color: var(--muted); border-radius: 8px; cursor: pointer; }
 .view-tab:hover { color: var(--text); }
 .view-tab.active { background: var(--panel); color: #a855f7; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
 .view-tab .badge { position: absolute; top: 3px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: #ec4899; }

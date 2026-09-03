@@ -63,6 +63,9 @@ class ScalarMetric(Metric):
 class Mean(ScalarMetric):
     """加权平均。update(value, weight=1.0)，weight 常传 batch_size。
 
+    经 MetricGroup 使用时可传组级权重 weight=batch_size（一次即可），
+    组内所有 Mean 自动加权，无需逐个传元组。
+
     多 GPU 下自动按各 rank 的权重和合并，等价于全局样本加权平均，
     而非"各卡平均值的平均"。
     """

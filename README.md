@@ -137,12 +137,14 @@ metrics = MetricGroup({
 
 for epoch in range(epochs):
     for _ in logger.progress(range(steps)):
-        metrics.update(loss=(loss, batch_size), acc=(acc, batch_size),
-                       seen=batch_size, best_acc=acc, lr=lr)
+        metrics.update(loss=loss, acc=acc, lr=lr,
+                       seen=batch_size, best_acc=acc, weight=batch_size)
     logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
 ```
 
 - `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
+- `weight=batch_size` 传一次即可：组内所有 `Mean` 类指标自动以它加权；
+  个别指标需要不同权重时传元组覆盖，如 `loss=(loss, token_num)`
 - `Mean` / `Sum` / `Max` / `Min` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
 - `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
 - `logger.log_group(group, reset=True)` 等价于 `logger.scalar(group.compute()); group.reset()`

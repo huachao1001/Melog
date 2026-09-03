@@ -48,13 +48,15 @@ def main():
             local_acc = 1 - local_loss / 2.1
             batch_size = 16 + step % 8
 
-            # 只需累积本地值；跨 GPU 合并在 compute() 内自动完成
+            # 只需累积本地值；跨 GPU 合并在 compute() 内自动完成。
+            # weight=batch_size 一次喂给所有 Mean（等价于逐个传元组）
             metrics.update(
-                loss=(local_loss, batch_size),
-                acc=(local_acc, batch_size),
+                loss=local_loss,
+                acc=local_acc,
                 seen=batch_size,
                 best_acc=local_acc,
                 lr=1e-3 * (0.98 ** (epoch * STEPS + step)),
+                weight=batch_size,
             )
             time.sleep(0.02)
 

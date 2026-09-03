@@ -92,6 +92,7 @@ class Melog:
         self._epoch: Optional[int] = None  # 当前 epoch（用户传入后粘滞生效）
         self._epoch_step = 0  # 当前 epoch 内步数（未显式传入时内部统计）
         self._epoch_base = 0  # 当前 epoch 起始处的全局 x（跨 epoch 连续）
+        self._epoch_bases: Dict[int, int] = {}  # 各 epoch 的全局 x 基准（媒体跨 epoch 定位）
         self._last_x = 0  # 最近一次记录的全局 x（媒体默认附着于此）
         self._last_epoch: Optional[int] = None  # 最近一次记录的 epoch
         self._pending = 0
@@ -189,6 +190,7 @@ class Melog:
                 self._epoch = epoch
                 self._epoch_step = 0
                 self._epoch_base = self._step
+                self._epoch_bases[epoch] = self._epoch_base
         disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
         bar = tqdm(iterable=iterable, total=total, desc=description, disable=disable, **kwargs)
         return self._register_progress(bar)
@@ -244,6 +246,7 @@ class Melog:
                 self._epoch = epoch
                 self._epoch_step = 0
                 self._epoch_base = self._step
+                self._epoch_bases[epoch] = self._epoch_base
             if self._epoch is None:
                 x = step if step is not None else self._step
                 out_epoch = None
@@ -285,7 +288,9 @@ class Melog:
             name: 图像名，支持 "train/sample" 层级命名（页面按名建卡片）。
             data: 文件路径 / PIL.Image / numpy / torch 张量
                 （(H,W) 灰度或 (H,W,C)，C=1/3/4；浮点自动映射 0-255）。
-            step / epoch: 缺省附着到最近一次 scalar() 的位置，不推进 step 计数。
+            step / epoch: 显式指定展示位置，语义与 scalar() 一致（epoch
+                模式下 step 为 epoch 内步数）；缺省附着到最近一次
+                scalar() 的位置。均不推进 step 计数。
             caption: 配文，随图显示在卡片上（如样本说明、预测对比）。
         """
         self._log_media("image", name, data, step=step, epoch=epoch, caption=caption,
@@ -307,7 +312,9 @@ class Melog:
             data: 文件路径（wav/mp3/flac 等按原格式复制）/ numpy / torch
                 波形（(N,) 单声道或 (N, 声道数)；浮点按 [-1,1] 裁剪）。
             sr: 采样率（data 为路径时忽略，沿用文件本身格式）。
-            step / epoch: 缺省附着到最近一次 scalar() 的位置，不推进 step 计数。
+            step / epoch: 显式指定展示位置，语义与 scalar() 一致（epoch
+                模式下 step 为 epoch 内步数）；缺省附着到最近一次
+                scalar() 的位置。均不推进 step 计数。
             caption: 配文，随音频显示在卡片上（如转写文本、听感说明）。
         """
         self._log_media("audio", name, data, step=step, epoch=epoch, sr=sr, caption=caption,
@@ -334,12 +341,19 @@ class Melog:
             self._push_web_media(kind, name, x, e, rel, sr=sr, caption=caption)
 
     def _media_position(self, step: Optional[int], epoch: Optional[int]):
-        """媒体条目的展示位置：缺省附着最近一次 scalar()，不推进任何计数器。"""
+        """媒体条目的展示位置：坐标规则与 scalar() 一致，但不推进任何计数器。
+
+        缺省附着最近一次 scalar() 的位置；epoch 模式下 step 为 epoch 内
+        步数，x = 该 epoch 的全局基准 + step。
+        """
         if step is None and epoch is None:
             return self._last_x, self._last_epoch
-        e = epoch if epoch is not None else self._last_epoch
-        x = step if step is not None else self._last_x
-        return x, e
+        e = epoch if epoch is not None else self._epoch
+        if e is None:
+            return (step if step is not None else self._last_x), None
+        base = self._epoch_bases.get(e, self._epoch_base)
+        s = step if step is not None else self._epoch_step
+        return base + s, e
 
     def _append_journal(self, record: Dict[str, Any]) -> None:
         """把一条记录追加到日志文件（调用方需持有 _lock）。"""

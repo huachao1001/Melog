@@ -109,11 +109,13 @@ melog.log("...")                   # 模块级同样可用（需先 init）
 
 ```python
 logger.scalar({"loss": loss}, epoch=epoch, step=step)
-logger.image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
-logger.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
+logger.image("train/sample", img)                        # 路径 / PIL / numpy / torch
+logger.image("val/sample", img, epoch=epoch, step=step)  # 也可显式指定 epoch / step
+logger.audio("val/audio", wav, sr=16000)                 # 路径(wav/mp3/…) / numpy / torch 波形
 ```
 
-- `step` / `epoch` 缺省时自动附着到**最近一次 `scalar()` 的位置**，不推进 step 计数
+- `step` / `epoch` 缺省时自动附着到**最近一次 `scalar()` 的位置**，不推进 step 计数；
+  显式传入时坐标规则与 `scalar()` 一致（epoch 模式下 `step` 为 epoch 内步数）
 - `caption="..."` 可为每条图像 / 音频配一段文字（如样本说明、转写文本），
   显示在卡片上、随滑杆切换；换行会被保留
 - 图像：`(H,W)` 灰度或 `(H,W,C)`（C=1/3/4），浮点自动映射 0-255，统一存为 PNG

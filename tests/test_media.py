@@ -257,6 +257,22 @@ def test_media_before_any_scalar_defaults_to_zero(logger):
     assert entries[0]["step"] == 0 and "epoch" not in entries[0]
 
 
+def test_media_explicit_step_is_epoch_internal(logger):
+    """epoch 模式下媒体坐标与 scalar() 同规则：x = epoch 基准 + epoch 内步数。"""
+    logger.scalar({"loss": 1.0}, epoch=0, step=9)   # epoch0 基准 0，推进全局 x 到 10
+    logger.scalar({"loss": 1.0}, epoch=1, step=4)   # epoch1 基准 10 → x=14
+    logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=1, step=5)
+    entry = logger.media.snapshot()["image"]["pred"][0]
+    assert entry["step"] == 15 and entry["epoch"] == 1
+    # 不推进任何计数器：下一次 scalar 仍在 epoch1 的 step 5
+    logger.scalar({"loss": 2.0})
+    rec = logger.store.snapshot()["loss"][-1]
+    assert rec["step"] == 15 and rec["epoch"] == 1
+    # 显式标注过去的 epoch：按该 epoch 自己的基准定位
+    logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=0, step=2)
+    assert logger.media.snapshot()["image"]["pred"][0]["step"] == 2
+
+
 def test_media_caption_roundtrip(logger):
     """caption 随记录贯通：journal / 内存索引 / 历史解析；无配文则不写该字段。"""
     logger.image("cap/img", np.zeros((2, 2), dtype=np.uint8),

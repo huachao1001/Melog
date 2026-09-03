@@ -30,7 +30,6 @@ CLASSES = 4
 EPOCHS = 5        # epoch 数：log 时传入 epoch，曲线按 epoch 画分界线
 STEPS = 120       # 每个 epoch 的步数
 BATCH = 64        # 每步模拟的 batch 大小
-LOG_EVERY = 10    # 每 10 步汇总记录一次（相当于一个验证窗口）
 INTERVAL = 0.05   # 每步间隔（秒），放慢以便观察曲线生长
 
 SUPPORT = [0.40, 0.30, 0.20, 0.10]   # 各类采样比例（类别 3 稀有）
@@ -73,19 +72,16 @@ def main():
 
     try:
         for epoch in range(EPOCHS):
-            # 每个 epoch 一条进度条并绑定 epoch；坐标（epoch/step）自动管理
-            for step in StepsBar(range(STEPS), epoch=epoch):
+            # 每个 epoch 一条进度条并绑定 epoch；坐标（epoch/step）自动管理。
+            # metrics=... 传入后：feed 即自动记录本卡实时值，epoch 末自动
+            # 跨 GPU 合并记录并 reset
+            batches = [simulate_batch(epoch * STEPS + s, rng) for s in range(STEPS)]
+            for step, (logits, labels) in enumerate(StepsBar(batches, epoch=epoch, metrics=metrics)):
                 g = epoch * STEPS + step  # 全局步数：模型能力按它增长
-                logits, labels = simulate_batch(g, rng)
                 loss = 1.8 * math.exp(-g / 180) + 0.4 + rng.gauss(0, 0.02)
-                # 标量指标按注册名喂入；分类指标的观测单独放进 args（按位置对应）
-                metrics.feed(args=(logits, labels), loss=(loss, len(labels)))
-                if step % LOG_EVERY == LOG_EVERY - 1:
-                    out = metrics.local()
-                    # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
-                    # 记录自动依附当前 epoch 与下一个空槽
-                    melog.scalar({k: v for k, v in out.items() if v == v})
-                    metrics.reset()
+                # 标量指标按注册名喂入（loss 自动按批次样本数平均）；
+                # 分类指标的观测单独放进 args（按位置对应）
+                metrics.feed(args=(logits, labels), loss=loss)
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")  # 进程退出时自动收尾（atexit）

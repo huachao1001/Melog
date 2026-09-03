@@ -47,8 +47,15 @@ class MetricGroup:
         self._metrics[name] = metric
         return self
 
-    def feed(self, args: Optional[Union[Tuple, Dict]] = None, **batch: Any) -> None:
+    def feed(self, args: Optional[Union[Tuple, Dict]] = None, *, write: bool = True,
+             **batch: Any) -> None:
         """把一个 batch 的全部观测喂给整组指标，分发由框架完成。
+
+        挂接 StepsBar(metrics=...) 时，feed 后默认（write=True）即自动
+        把本卡本地值写入日志/面板（零通信，仅 rank0 落盘），无需再手动
+        scalar；epoch 末由 StepsBar 跨 GPU 合并记录并 reset。write=False
+        时只累积内存，由手动 melog.scalar(metrics) 落盘。未挂接
+        StepsBar 的组不自动记录，同样手动 scalar 落盘。
 
         Args:
             args: 单批次指标（BatchMetric，如分类指标与自定义
@@ -57,6 +64,8 @@ class MetricGroup:
                 - 字典：按键名对应 compute_batch 的形参名（推荐，
                   形参多时更可读）
                 组内没有单批次指标时可不传。
+            write: 是否实时写入日志/面板（挂接 StepsBar 时生效，默认
+                True 即 feed 即记录）。
             **batch: 标量指标（Mean / Sum / Last / Count）的观测，按
                 注册名取同名键。Mean 的观测数自动取 StepsBar 识别的
                 批次样本数（识别失败等权）；需手动指定时传元组
@@ -79,7 +88,7 @@ class MetricGroup:
                 else:
                     metric.feed(value)
         if self._on_feed is not None:
-            self._on_feed()
+            self._on_feed(write)
 
     def local(self) -> Dict[str, Any]:
         """当前 rank 的本地指标值（零通信，不触发跨 rank 收集），供实时显示。

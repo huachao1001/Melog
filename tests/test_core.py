@@ -240,21 +240,26 @@ def test_stepsbar_binds_epoch(lg):
 
 
 # -------------------------------------------------------------- StepsBar 自动记录
-def test_stepsbar_auto_log_on_complete(lg):
-    """StepsBar(metrics=...)：自然迭代结束自动合并记录，记录后清零。"""
+def test_stepsbar_feed_auto_records_local(lg):
+    """StepsBar(metrics=...)：feed 即自动记录本卡实时值（零通信）。
+
+    曲线上 epoch 内是每次 feed 的本地运行值；迭代自然结束再跨 GPU
+    合并记录一次全局值（单进程下与本地值一致）。
+    """
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
-    bar = StepsBar(range(3), epoch=0, metrics=group)
-    assert bar.total == 3  # len() 透传，total 自动检测不受包装影响
-    for _ in bar:
-        group.feed(m=2.0)
-    assert lg.store.snapshot()["m"] == [{"step": 0, "value": 2.0, "epoch": 0}]
+    for i in StepsBar(range(4), epoch=0, metrics=group):
+        group.feed(m=float(i + 1))
+    snap = lg.store.snapshot()["m"]
+    assert [r["value"] for r in snap[:4]] == [1.0, 1.5, 2.0, 2.5]  # 运行均值
+    assert snap[4]["value"] == pytest.approx(2.5)  # epoch 末全局合并值
+    assert [r["step"] for r in snap] == [0, 1, 2, 3, 4]
     assert group._compute() != group._compute()  # 已重置 -> NaN
 
 
 def test_stepsbar_auto_log_each_epoch(lg):
-    """每个 epoch 一条 bar：各自在末尾自动记录一次。"""
+    """每个 epoch 一条 bar：epoch 内 feed 实时记录，末尾自动记录全局值。"""
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
@@ -262,11 +267,13 @@ def test_stepsbar_auto_log_each_epoch(lg):
         for i in StepsBar(range(3), epoch=e, metrics=group):
             group.feed(m=float(i + 1))
     snap = lg.store.snapshot()["m"]
-    assert [(r["epoch"], r["value"]) for r in snap] == [(0, 2.0), (1, 2.0)]
+    # epoch0 本地运行值 1.0/1.5/2.0 + 末尾全局值 2.0；epoch1 同构
+    assert [r["value"] for r in snap if r["epoch"] == 0] == [1.0, 1.5, 2.0, 2.0]
+    assert [r["value"] for r in snap if r["epoch"] == 1] == [1.0, 1.5, 2.0, 2.0]
 
 
 def test_stepsbar_no_auto_log_on_break(lg):
-    """提前 break：不触发自动记录（各 rank 迭代进度可能不一致）。"""
+    """提前 break：不触发 epoch 末全局记录（各 rank 迭代进度可能不一致）。"""
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
@@ -274,12 +281,13 @@ def test_stepsbar_no_auto_log_on_break(lg):
     for _ in bar:
         group.feed(m=1.0)
         break
-    bar.close()  # 手动收尾进度条；自动记录不触发
-    assert lg.store.snapshot() == {}
+    bar.close()  # 手动收尾进度条
+    snap = lg.store.snapshot()["m"]
+    assert len(snap) == 1  # 仅已 feed 的本地记录，无 epoch 末全局记录
 
 
 def test_stepsbar_no_auto_log_on_exception(lg):
-    """循环内抛异常：不触发自动记录。"""
+    """循环内抛异常：不触发 epoch 末全局记录。"""
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
@@ -289,7 +297,7 @@ def test_stepsbar_no_auto_log_on_exception(lg):
             group.feed(m=1.0)
             raise RuntimeError("boom")
     bar.close()
-    assert lg.store.snapshot() == {}
+    assert len(lg.store.snapshot()["m"]) == 1  # 仅已 feed 的本地记录
 
 
 def test_stepsbar_break_closes_bar(lg):
@@ -323,7 +331,8 @@ def test_detect_count_various_batch_formats():
     from melog.tracking.steps_bar import _detect_count
 
     assert _detect_count([1.0, 2.0, 3.0]) == 3.0        # 标量列表：长度即样本数
-    assert _detect_count(([1.0, 2.0], [1, 2])) == 2.0   # (x, y)：取第一个元素的样本数
+    assert _detect_count([[1, 2], [3, 4], [5, 6]]) == 3.0  # 样本列表：外层长度
+    assert _detect_count(([1.0, 2.0], [1, 2])) == 2.0   # (x, y)：取第一个观测
     assert _detect_count({"x": [1.0], "y": [0.0]}) == 1.0  # 字典：递归取值
     assert _detect_count(5) is None
     assert _detect_count(range(3)) is None
@@ -339,7 +348,8 @@ def test_stepsbar_auto_batch_count(lg):
     for _ in StepsBar(batches, epoch=0, metrics=group):
         group.feed(m=next(vals))
     # 等权应为 1.5；按样本数加权 = (1*3 + 2*1) / 4
-    assert lg.store.snapshot()["m"][0]["value"] == pytest.approx(1.25)
+    # 本地实时记录：第一个 batch 1.0，第二个 batch 起运行均值 1.25；末尾全局 1.25
+    assert [r["value"] for r in lg.store.snapshot()["m"]] == [1.0, 1.25, 1.25]
 
 
 def test_stepsbar_count_fallback_equal_weight(lg):
@@ -351,7 +361,9 @@ def test_stepsbar_count_fallback_equal_weight(lg):
         for _ in StepsBar(range(2), epoch=e, metrics=group):
             group.feed(m=float(e + 1))
     snap = lg.store.snapshot()["m"]
-    assert [r["value"] for r in snap] == [1.0, 2.0]  # 等权
+    # 每 epoch：两次 feed 的本地记录 + 末尾全局记录，均等权
+    assert [r["value"] for r in snap if r["epoch"] == 0] == [1.0, 1.0, 1.0]
+    assert [r["value"] for r in snap if r["epoch"] == 1] == [2.0, 2.0, 2.0]
     assert group._count_warned  # 两个 epoch 只警告一次
 
 
@@ -379,8 +391,36 @@ def test_stepsbar_realtime_postfix(lg):
     for _ in bar:
         pass
     # 自然结束：gather 全局值落盘并重置；曲线得到精确结果
-    assert lg.store.snapshot()["m"] == [{"step": 0, "value": 2.0, "epoch": 0}]
+    # 曲线 = 两次 feed 的本地记录 + 末尾全局记录
+    assert [r["value"] for r in lg.store.snapshot()["m"]] == [1.0, 2.0, 2.0]
     assert group._compute() != group._compute()  # 已重置 -> NaN
+
+
+def test_stepsbar_feed_write_false(lg):
+    """feed(write=False) 只累积内存不实时写入；手动 melog.scalar(metrics) 落盘。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"m": Mean()})
+    bar = StepsBar(range(3), epoch=0, metrics=group)
+    group.feed(m=1.0, write=False)
+    assert bar.postfix["m"] == pytest.approx(1.0)  # postfix 照常实时显示
+    for _ in bar:
+        group.feed(m=2.0, write=False)
+    snap = lg.store.snapshot()["m"]
+    assert len(snap) == 1  # 无逐 feed 本地记录，仅 epoch 末全局记录
+    # 全局值含循环前的观测：(1.0 + 2.0*3) / 4
+    assert snap[0]["value"] == pytest.approx(1.75)
+
+
+def test_feed_without_bar_needs_manual_scalar(lg):
+    """未挂接 StepsBar 的组：feed 不自动记录，需手动 melog.scalar(metrics)。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"m": Mean()})
+    group.feed(m=2.0)  # write 默认 True，但无钩子 -> 不记录
+    assert lg.store.snapshot() == {}
+    lg.scalar(group)  # 手动落盘
+    assert lg.store.snapshot()["m"][0]["value"] == pytest.approx(2.0)
 
 
 def test_stepsbar_postfix_skips_nan(lg):

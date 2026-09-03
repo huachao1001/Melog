@@ -204,6 +204,20 @@ class Melog:
     # 兼容 wandb 风格别名
     log_metrics = scalar
 
+    def _record_local(self, values: Dict[str, Any]) -> None:
+        """记录本卡本地指标值（零通信；StepsBar 挂接的指标组 feed 时实时调用）。
+
+        与 scalar() 的区别：不做跨 rank 合并，坐标规则相同（依附当前
+        绑定的 epoch 与下一个空槽）。仅 rank0 落盘，其余 rank 直接返回。
+        """
+        if not self._is_primary:
+            return
+        with self._lock:
+            x, out_epoch = self._axis.resolve_commit()
+            self._journal.add(x, values, out_epoch)
+            self._push_web(x, values, out_epoch)
+            self._axis.commit(x, out_epoch)
+
     # ------------------------------------------------------------------ 记录媒体
     def image(
         self,

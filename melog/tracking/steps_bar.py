@@ -37,8 +37,8 @@ def _detect_count(batch: Any) -> Optional[float]:
     识别规则（尽力而为，覆盖常见格式）：
     - 带形状的批次对象（torch tensor / numpy）：shape[0]
     - 字典：递归取第一个能识别的值
-    - 列表 / 元组：全标量时取长度（即样本列表），否则递归取第一个元素
-      （如 (images, labels) 取 images 的样本数）
+    - 元组：一批观测的多个部分（如 (images, labels)），递归取第一个
+    - 列表：样本列表（元素为单条样本或标量），取长度
     """
     shape = getattr(batch, "shape", None)
     if shape is not None and len(shape) >= 1:
@@ -49,10 +49,10 @@ def _detect_count(batch: Any) -> Optional[float]:
             if n is not None:
                 return n
         return None
-    if isinstance(batch, (list, tuple)) and batch:
-        if all(isinstance(x, (int, float)) for x in batch):
-            return float(len(batch))
+    if isinstance(batch, tuple) and batch:
         return _detect_count(batch[0])
+    if isinstance(batch, list) and batch:
+        return float(len(batch))
     return None
 
 
@@ -80,13 +80,14 @@ class StepsBar(tqdm):
             for _ in StepsBar(loader, epoch=epoch):
                 melog.scalar({"loss": loss})   # 坐标自动依附 epoch
 
-    传入 metrics（MetricGroup）时，进度条实时显示本卡本地值——每次
-    feed() 后零通信刷新 postfix（实际渲染的只有 rank0，即主卡本地
-    值；无观测的指标与非数值结果自动跳过）。同时每次迭代自动从批次
-    数据识别样本数注入指标组，Mean 按它精确平均（feed 无需传元组）；
-    识别失败（如迭代 range）回退等权平均并警告一次。迭代自然结束即
-    gather 所有 rank 的状态、合并记录全局值一次并重置组内指标（开启
-    下一轮统计），曲线上得到跨 GPU 精确合并的结果::
+    传入 metrics（MetricGroup）时，每次 feed() 即自动记录本卡本地值
+    进日志/面板（零通信，仅 rank0 落盘；write=False 则只累积内存，
+    手动 melog.scalar(metrics) 落盘），同时刷新 postfix 实时显示
+    （NaN 与非数值结果自动跳过）；并自动从批次数据识别样本数注入指标
+    组，Mean 按它精确平均（feed 无需传元组），识别失败（如迭代 range）
+    回退等权平均并警告一次。迭代自然结束再 gather 所有 rank 的状态、
+    合并记录全局值一次并重置组内指标（开启下一轮统计），曲线上
+    epoch 内是主卡实时值、epoch 末是跨 GPU 精确合并的结果::
 
         for _ in StepsBar(loader, epoch=e, metrics=metrics):
             metrics.feed(...)
@@ -125,9 +126,9 @@ class StepsBar(tqdm):
             total: 总步数；缺省时自动取 len(iterable)。
             epoch: 绑定该 epoch（epoch 内步数清零、全局 x 接续、行首
                 自动标注 "epoch N"）。
-            metrics: MetricGroup；bar 实时显示本卡本地值，自动从批次
-                识别样本数供 Mean 精确平均，迭代自然结束自动合并记录
-                全局值并重置组内指标。
+            metrics: MetricGroup；每次 feed 自动记录本卡本地值（实时
+                曲线 + bar 显示），自动从批次识别样本数供 Mean 精确
+                平均，迭代自然结束自动合并记录全局值并重置组内指标。
             **kwargs: 其余参数透传 tqdm（desc / leave / mininterval 等）。
         """
         from ..core import current  # 延迟导入：core 也引用本模块，避免循环
@@ -162,23 +163,29 @@ class StepsBar(tqdm):
             kwargs["desc"] = f"epoch {epoch}"
         super().__init__(iterable=iterable, total=total, disable=disable, **kwargs)
         if metrics is not None:
-            self._hook_metrics(metrics)
+            self._hook_metrics(metrics, host)
         host._bars.push(self, metrics)
         self.on_close = lambda: host._bars.forget(self)
 
-    def _hook_metrics(self, metrics: MetricGroup) -> None:
-        """挂载实时刷新钩子：feed() 后把本卡本地数值刷进自己的 postfix。
+    def _hook_metrics(self, metrics: MetricGroup, host: "Melog") -> None:
+        """挂载实时钩子：feed() 后把本卡本地值刷进 postfix 并写日志/面板。
 
-        NaN 与非数值（如混淆矩阵）不上 postfix；即使本条被上层 bar
-        覆盖，postfix 数据照常更新，恢复渲染时可见。
+        NaN 与非数值（如混淆矩阵）跳过；即使本条被上层 bar 覆盖，
+        postfix 数据照常更新，恢复渲染时可见。记录走 _record_local：
+        零通信、仅 rank0 落盘（跨 GPU 合并留给 epoch 末自动记录）；
+        feed(write=False) 时只刷 postfix、不写日志。
         """
 
-        def _display_local() -> None:
+        def _on_feed(write: bool = True) -> None:
             snap = {
                 k: v
                 for k, v in metrics.local().items()
                 if isinstance(v, (int, float)) and v == v
             }
+            if not snap:
+                return
             self.set_postfix(snap)
+            if write:
+                host._record_local(snap)
 
-        metrics._on_feed = _display_local
+        metrics._on_feed = _on_feed

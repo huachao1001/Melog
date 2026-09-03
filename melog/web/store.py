@@ -4,30 +4,36 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from ..downsample import downsample
 
 
 class MetricStore:
-    """按指标名维护 (step, value) 历史；drain 取出未落盘记录。"""
+    """按指标名维护 (step, value, epoch) 历史；drain 取出未落盘记录。"""
 
     def __init__(self):
         self._data: Dict[str, List[tuple]] = defaultdict(list)
         self._pending: List[Dict] = []  # 待落盘队列
         self._lock = threading.Lock()
 
-    def add(self, step: int, metrics: Dict[str, float]) -> None:
+    def add(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
         with self._lock:
             for name, value in metrics.items():
-                self._data[name].append((step, float(value)))
-                self._pending.append({"metric": name, "step": step, "value": float(value)})
+                self._data[name].append((step, float(value), epoch))
+                rec = {"metric": name, "step": step, "value": float(value)}
+                if epoch is not None:
+                    rec["epoch"] = epoch
+                self._pending.append(rec)
 
     def snapshot(self, max_points: int | None = None) -> Dict[str, List[Dict]]:
-        """全量历史的展示快照，可选降采样。"""
+        """全量历史的展示快照，可选降采样；epoch 仅在启用时输出。"""
         with self._lock:
             return {
-                name: [{"step": s, "value": v} for s, v in downsample(points, max_points)]
+                name: [
+                    {"step": s, "value": v, **({"epoch": e} if e is not None else {})}
+                    for s, v, e in downsample(points, max_points)
+                ]
                 for name, points in self._data.items()
             }
 

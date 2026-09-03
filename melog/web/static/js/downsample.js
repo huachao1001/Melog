@@ -12,9 +12,13 @@ export class PointDownsampler {
     const out = [];
     for (let i = 0; i < maxPoints; i++) {
       const s = Math.floor(i * bucket), e = Math.max(s + 1, Math.floor((i + 1) * bucket));
-      let ss = 0, vv = 0;
-      for (let j = s; j < e; j++) { ss += points[j].step; vv += points[j].value; }
-      out.push({ step: ss / (e - s), value: vv / (e - s) });
+      let ss = 0, vv = 0, ep;
+      for (let j = s; j < e; j++) {
+        ss += points[j].step; vv += points[j].value;
+        if (points[j].epoch != null) ep = points[j].epoch;  // 桶内取最后一个非空 epoch
+      }
+      out.push(ep === undefined ? { step: ss / (e - s), value: vv / (e - s) }
+                                 : { step: ss / (e - s), value: vv / (e - s), epoch: ep });
     }
     out[0] = points[0];
     out[out.length - 1] = points[points.length - 1];

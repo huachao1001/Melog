@@ -9,6 +9,12 @@
  */
 import { PointDownsampler } from './downsample.js';
 
+// 图表数值显示：最多小数点后 3 位，尾随 0 省略（0.5 不显示成 0.500）
+const fmt3 = (v) => {
+  const s = Number(v).toFixed(3).replace(/\.?0+$/, '');
+  return s === '-0' ? '0' : s;
+};
+
 export class ChartManager {
   constructor({ palette, maxPoints, themeProvider }) {
     this.palette = palette;
@@ -25,7 +31,7 @@ export class ChartManager {
     if (msg.type === 'history') {
       for (const [name, pts] of Object.entries(msg.metrics)) this.upsert(name, pts);
     } else if (msg.type === 'update') {
-      for (const [name, value] of Object.entries(msg.metrics)) this.append(name, msg.step, value);
+      for (const [name, value] of Object.entries(msg.metrics)) this.append(name, msg.step, value, msg.epoch);
     } else if (msg.type === 'colors') {
       this.setColors(msg.colors);
     }
@@ -98,11 +104,11 @@ export class ChartManager {
     this.#syncSeries(group);
   }
 
-  append(name, step, value) {
+  append(name, step, value, epoch) {
     const group = this.#groupOf(name);
     this.ensureChart(group);
     const pts = this.data[group][name] || [];
-    pts.push({ step, value });
+    pts.push(epoch == null ? { step, value } : { step, value, epoch });
     if (pts.length > this.downsampler.maxPoints) {
       this.data[group][name] = this.downsampler.downsample(pts);
     } else {
@@ -129,11 +135,62 @@ export class ChartManager {
       const color = this.colors[n] || this.#colorFor(n, used);
       return this.#series(group, n, color, multi);
     });
+    // epoch 分界线挂在第一个系列上（多系列共享同一分界），无 epoch 时清除
+    const marks = this.#epochMarks(group);
+    if (series.length) {
+      series[0].markLine = marks.length ? this.#markLineOption(marks) : { data: [] };
+    }
     chart.setOption({
       legend: { show: multi, data: names.map((n) => this.#labelOf(n)) },
       grid: { top: multi ? 36 : 20 },
       series,
     });
+  }
+
+  /** 收集整组数据的 epoch 分界：epoch 值变化处一条竖线（含首个 epoch 起点）。 */
+  #epochMarks(group) {
+    const all = [];
+    for (const arr of Object.values(this.data[group])) {
+      for (const p of arr) if (p.epoch != null) all.push(p);
+    }
+    if (!all.length) return [];
+    all.sort((a, b) => a.step - b.step);
+    const marks = [];
+    for (const p of all) {
+      // 相邻同 epoch 的重复分界（多系列/降采样导致 x 略有偏差）只保留一条
+      if (!marks.length || marks[marks.length - 1].epoch !== p.epoch) {
+        marks.push({ xAxis: p.step, epoch: p.epoch });
+      }
+    }
+    return marks;
+  }
+
+  /** epoch 分界竖线：灰色虚线，顶部标注 e<epoch>。 */
+  #markLineOption(marks) {
+    const t = this.themeProvider();
+    return {
+      silent: true,
+      symbol: 'none',
+      animation: false,
+      lineStyle: { color: t.axis, type: 'dashed', width: 1, opacity: 0.45 },
+      label: { position: 'end', color: t.axis, fontSize: 10, formatter: (p) => `e${p.data.epoch}` },
+      data: marks,
+    };
+  }
+
+  /** 轴触发 tooltip：启用 epoch 时标题显示 "epoch N · step X"。 */
+  #tooltip(params) {
+    if (!params || !params.length) return '';
+    const p0 = params[0];
+    const x = Array.isArray(p0.value) ? p0.value[0] : p0.value;
+    const ep = params.map((p) => (p.data && p.data.epoch != null ? p.data.epoch : null))
+      .find((e) => e != null);
+    const title = ep != null ? `epoch ${ep} · step ${fmt3(x)}` : `step ${fmt3(x)}`;
+    const lines = params.map((p) => {
+      const v = Array.isArray(p.value) ? p.value[1] : p.value;
+      return `${p.marker} ${p.seriesName}&nbsp;&nbsp;<b>${fmt3(v)}</b>`;
+    });
+    return [title, ...lines].join('<br/>');
   }
 
   #series(group, name, color, multi) {
@@ -148,7 +205,8 @@ export class ChartManager {
       itemStyle: { color },  // 系列主色：legend 标记圆点与 tooltip 悬浮圆点都用它，保证与线色一致
       lineStyle: { width: multi ? 1.5 : 2, color },
       areaStyle: multi ? { opacity: 0 } : { opacity: 0.1, color },
-      data: pts.map((p) => [p.step, p.value]),
+      // 有 epoch 的点带元信息，tooltip 据此显示 epoch；普通点保持 [x, y]
+      data: pts.map((p) => (p.epoch == null ? [p.step, p.value] : { value: [p.step, p.value], epoch: p.epoch })),
     };
   }
 
@@ -181,14 +239,18 @@ export class ChartManager {
       backgroundColor: 'transparent',
       animation: false,
       grid: { left: 60, right: 20, top: 36, bottom: 60 },
-      xAxis: { type: 'value', name: 'step', axisLabel: { color: t.axis }, axisLine: { lineStyle: { color: t.split } }, splitLine: { lineStyle: { color: t.split } } },
-      yAxis: { type: 'value', scale: true, axisLabel: { color: t.axis }, splitLine: { lineStyle: { color: t.split } } },
-      tooltip: { trigger: 'axis' },
-      // 多系列时 legend 可滚动翻页（类别多也不挤爆卡片）；单系列卡片隐藏
+      xAxis: { type: 'value', name: 'step', axisLabel: { color: t.axis, formatter: fmt3 }, axisLine: { lineStyle: { color: t.split } }, splitLine: { lineStyle: { color: t.split } } },
+      yAxis: { type: 'value', scale: true, axisLabel: { color: t.axis, formatter: fmt3 }, splitLine: { lineStyle: { color: t.split } } },
+      tooltip: { trigger: 'axis', confine: true, formatter: (params) => this.#tooltip(params) },
+      // 多系列时 legend 可滚动翻页（类别多也不挤爆卡片）；单系列卡片隐藏。
+      // icon 用实心圆点：直接填充系列色（line 系列默认图例是白心圆环）
       legend: {
         show: false,
         type: 'scroll',
         top: 4,
+        icon: 'circle',
+        itemWidth: 12,
+        itemHeight: 12,
         textStyle: { color: t.axis, fontSize: 11 },
         pageIconColor: t.axis,
         pageIconInactiveColor: t.split,

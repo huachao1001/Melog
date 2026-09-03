@@ -50,6 +50,46 @@ def test_api_metrics_snapshot(app_client):
     assert resp.json()["metrics"]["loss"] == [{"step": 0, "value": 1.0}]
 
 
+def test_store_snapshot_carries_epoch():
+    store = MetricStore()
+    store.add(0, {"loss": 1.0}, epoch=2)
+    store.add(1, {"loss": 0.5})  # 未传 epoch 的点不带该字段
+    snap = store.snapshot()
+    assert snap["loss"] == [
+        {"step": 0, "value": 1.0, "epoch": 2},
+        {"step": 1, "value": 0.5},
+    ]
+
+
+def test_loader_parses_epoch(tmp_path):
+    from melog.web.loader import LogLoader
+
+    log = tmp_path / "metrics.melog"
+    log.write_text(
+        '{"metric": "loss", "step": 0, "value": 1.0, "epoch": 0}\n'
+        '{"metric": "loss", "step": 5, "value": 0.5, "epoch": 1}\n'
+        '{"metric": "loss", "step": 6, "value": 0.4}\n'  # 旧格式无 epoch
+        "坏行跳过\n",
+        encoding="utf-8",
+    )
+    series = LogLoader.parse(log)
+    assert series["loss"] == [(0, 1.0, 0), (5, 0.5, 1), (6, 0.4, None)]
+
+
+def test_publish_carries_epoch(app_client):
+    client, server = app_client
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # history
+        ws.receive_json()  # colors
+        time.sleep(0.1)
+        import asyncio
+
+        asyncio.run(server.hub.broadcast({"type": "update", "step": 3, "metrics": {"loss": 0.9}, "epoch": 1}))
+        msg = ws.receive_json()
+        assert msg["type"] == "update"
+        assert msg["epoch"] == 1
+
+
 def test_websocket_history(app_client):
     client, server = app_client
     server.store.add(3, {"loss": 0.5})

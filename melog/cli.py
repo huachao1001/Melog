@@ -32,8 +32,8 @@ def _load_into_store(store: MetricStore, log_file: Path) -> int:
     series = LogLoader.parse(log_file)
     count = 0
     for name, pts in series.items():
-        for step, value in pts:
-            store.add(step, {name: value})
+        for step, value, epoch in pts:
+            store.add(step, {name: value}, epoch)
             count += 1
     return count
 

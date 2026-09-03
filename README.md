@@ -38,6 +38,22 @@ logger.finish()   # 落盘剩余指标并停止 Web 服务
 
 训练期间浏览器打开 `http://127.0.0.1:8666` 查看实时曲线。
 
+## 曲线上体现 epoch
+
+`log()` 可传入 `epoch` 与当前 epoch 内的 `step`，Web 曲线会在每个 epoch 起点画分界虚线
+（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`；两者都不传时内部自动统计 step，
+行为与旧版一致：
+
+```python
+for epoch in range(epochs):
+    for step in range(steps):
+        logger.log({"loss": loss, "lr": lr}, epoch=epoch, step=step)
+```
+
+- `epoch` 缺省时**粘滞沿用**上一次传入的值（整个 epoch 内只需传一次），从未传入则不记录 epoch
+- `step` 为**当前 epoch 内**的步数，缺省内部自增（每个 epoch 从 0 重新计步）；
+  未启用 epoch 时 `step` 含义不变（全局步数，缺省自增）
+
 ## 指标计算（多 GPU 自动同步）
 
 内置 `Mean` / `Sum` / `Max` / `Min` / `Last` / `Count`，按 epoch 组织在 `MetricGroup` 中使用：
@@ -179,7 +195,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 ### 主要方法
 
-- `log(metrics, step=None, advance=1)` — 记录一批指标；`step` 缺省自增
+- `log(metrics, step=None, epoch=None, advance=1)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
 - `train(total)` — 返回进度条上下文管理器（`bar.advance(n)` 推进）
 - `finish()` — 落盘并停止 Web 服务
 

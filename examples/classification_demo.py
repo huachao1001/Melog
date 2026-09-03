@@ -4,6 +4,7 @@
 浏览器打开终端打印的地址，应看到：
 - acc / loss：普通单曲线卡片
 - recall、f1、auc：每类一条曲线的分组卡片（legend 可逐类开关）
+- 每个 epoch 起点有一条灰色虚线分界（标注 e0 / e1 / …），悬浮显示 epoch · step
 
 模拟一个 4 类分类器，各类难度与样本量不同：
 - 类别 0：简单、样本多，快速收敛
@@ -25,7 +26,8 @@ import time
 from melog import Accuracy, AUC, F1, Mean, Melog, MetricGroup, Recall
 
 CLASSES = 4
-STEPS = 600       # 总步数
+EPOCHS = 5        # epoch 数：log 时传入 epoch，曲线按 epoch 画分界线
+STEPS = 120       # 每个 epoch 的步数
 BATCH = 64        # 每步模拟的 batch 大小
 LOG_EVERY = 10    # 每 10 步汇总记录一次（相当于一个验证窗口）
 INTERVAL = 0.05   # 每步间隔（秒），放慢以便观察曲线生长
@@ -70,18 +72,23 @@ def main():
     )
 
     try:
-        with logger.train(total=STEPS, description="multiclass-demo") as bar:
-            for step in range(STEPS):
-                logits, labels = simulate_batch(step, rng)
-                loss = 1.8 * math.exp(-step / 180) + 0.4 + rng.gauss(0, 0.02)
-                metrics.feed(logits=logits, labels=labels, loss=(loss, len(labels)))
-                if step % LOG_EVERY == LOG_EVERY - 1:
-                    out = metrics.compute()
-                    # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
-                    logger.log({k: v for k, v in out.items() if v == v}, advance=LOG_EVERY)
-                    metrics.reset()
-                bar.advance(1)
-                time.sleep(INTERVAL)
+        with logger.train(total=EPOCHS * STEPS, description="multiclass-demo") as bar:
+            for epoch in range(EPOCHS):
+                for step in range(STEPS):
+                    g = epoch * STEPS + step  # 全局步数：模型能力按它增长
+                    logits, labels = simulate_batch(g, rng)
+                    loss = 1.8 * math.exp(-g / 180) + 0.4 + rng.gauss(0, 0.02)
+                    metrics.feed(logits=logits, labels=labels, loss=(loss, len(labels)))
+                    if step % LOG_EVERY == LOG_EVERY - 1:
+                        out = metrics.compute()
+                        # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
+                        # 传入 epoch + 当前 epoch 的 step：曲线上标注 epoch 分界；
+                        # 都不传则内部自动统计 step
+                        logger.log({k: v for k, v in out.items() if v == v},
+                                   epoch=epoch, step=step, advance=LOG_EVERY)
+                        metrics.reset()
+                    bar.advance(1)
+                    time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")
     finally:

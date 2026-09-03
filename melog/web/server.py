@@ -71,9 +71,12 @@ class WebServer:
         self.app = app
 
     # ------------------------------------------------------------------ 推送
-    def publish(self, step: int, metrics: Dict[str, float]) -> None:
+    def publish(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
         """线程安全：从训练主线程向所有 WebSocket 客户端广播增量指标。"""
-        self.hub.publish({"type": "update", "step": step, "metrics": metrics})
+        payload: Dict[str, object] = {"type": "update", "step": step, "metrics": metrics}
+        if epoch is not None:
+            payload["epoch"] = epoch
+        self.hub.publish(payload)
 
     def set_colors(self, colors: Dict[str, str]) -> None:
         """线程安全：更新用户指定颜色（指标名 -> CSS 颜色）并广播。"""

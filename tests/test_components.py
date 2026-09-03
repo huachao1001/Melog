@@ -70,7 +70,7 @@ def test_loader_parse(tmp_path):
         encoding="utf-8",
     )
     series = LogLoader.parse(jl)
-    assert series["loss"] == [(0, 1.0), (1, 0.5)]  # 按 step 排序
+    assert series["loss"] == [(0, 1.0, None), (1, 0.5, None)]  # 按 step 排序；无 epoch 记 None
 
 
 # ---------------------------------------------------------------- MetricView
@@ -80,7 +80,7 @@ def test_view_switches_between_realtime_and_loaded():
     store.add(0, {"live": 1.0})
     assert view.snapshot()["live"] == [{"step": 0, "value": 1.0}]
 
-    view.set_loaded({"hist": [(5, 0.5)]})
+    view.set_loaded({"hist": [(5, 0.5, None)]})
     assert view.snapshot() == {"hist": [{"step": 5, "value": 0.5}]}
 
     view.clear_loaded()
@@ -96,10 +96,10 @@ def test_view_colors_realtime_vs_loaded():
     view.set_colors({"loss": "#ef4444"})
     assert view.colors == {"loss": "#ef4444"}
 
-    view.set_loaded({"hist": [(0, 1.0)]}, colors={"acc": "#3b82f6"})
+    view.set_loaded({"hist": [(0, 1.0, None)]}, colors={"acc": "#3b82f6"})
     assert view.colors == {"acc": "#3b82f6"}
 
-    view.set_loaded({"hist2": [(0, 2.0)]})  # 无 colors.json 的历史日志
+    view.set_loaded({"hist2": [(0, 2.0, None)]})  # 无 colors.json 的历史日志
     assert view.colors == {}
 
     view.clear_loaded()

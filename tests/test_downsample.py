@@ -52,3 +52,17 @@ def test_snapshot_downsampled(tmp_path):
     assert len(snap["loss"]) == 1000
     # 全量仍保留在内存历史中
     assert len(store.snapshot()["loss"]) == 5000
+
+
+def test_downsample_keeps_epoch():
+    # 分桶均值取 step/value，epoch 取桶内最后一个非空值
+    pts = [(0, 1.0, 0), (1, 2.0, 0), (2, 3.0, 1), (3, 4.0, 1)]
+    out = downsample(pts, 2)
+    assert out[0] == (0, 1.0, 0)
+    assert out[1][2] == 1
+
+
+def test_downsample_2tuple_passthrough():
+    pts = [(i, float(i)) for i in range(100)]
+    out = downsample(pts, 10)
+    assert all(len(p) == 2 for p in out)

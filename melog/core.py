@@ -67,6 +67,9 @@ class Melog:
         self._rank = get_rank()
         self._is_primary = self._rank == 0
         self._step = 0
+        self._epoch: Optional[int] = None  # 当前 epoch（用户传入后粘滞生效）
+        self._epoch_step = 0  # 当前 epoch 内步数（未显式传入时内部统计）
+        self._epoch_base = 0  # 当前 epoch 起始处的全局 x（跨 epoch 连续）
         self._pending = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -118,6 +121,7 @@ class Melog:
         self,
         metrics: Dict[str, Union[float, int, Any]],
         step: Optional[int] = None,
+        epoch: Optional[int] = None,
         advance: int = 1,
         commit: bool = True,
     ) -> Dict[str, float]:
@@ -128,7 +132,10 @@ class Melog:
 
         Args:
             metrics: 指标名 -> 数值（float / int / 0 维 tensor）。
-            step: 全局步数，缺省时内部自增。
+            step: 当前 epoch 内的步数；未启用 epoch 时为全局步数，
+                缺省时内部自增（epoch 模式下每个 epoch 从 0 重新计步）。
+            epoch: 当前 epoch 序号，曲线图据此标注 epoch 分界；
+                缺省沿用上一次传入的值，从未传入则不记录 epoch。
             advance: 进度条前进步数。
             commit: 是否推进内部 step 计数。
         Returns:
@@ -139,15 +146,26 @@ class Melog:
         if not self._is_primary:
             return merged
 
-        if step is None:
-            step = self._step
         with self._lock:
-            self.store.add(step, merged)
-            self._push_web(step, merged)
+            if epoch is not None and epoch != self._epoch:
+                # 切换 epoch：epoch 内步数清零，全局 x 从上一位置接续
+                self._epoch = epoch
+                self._epoch_step = 0
+                self._epoch_base = self._step
+            if self._epoch is None:
+                x = step if step is not None else self._step
+                out_epoch = None
+            else:
+                s = step if step is not None else self._epoch_step
+                x = self._epoch_base + s
+                out_epoch = self._epoch
+            self.store.add(x, merged, out_epoch)
+            self._push_web(x, merged, out_epoch)
             self._update_progress(merged)
             self._maybe_flush()
             if commit:
-                self._step = step + 1
+                self._epoch_step = (step + 1) if step is not None else (self._epoch_step + 1)
+                self._step = x + 1
         return merged
 
     # 兼容 wandb 风格别名
@@ -157,6 +175,7 @@ class Melog:
         self,
         group: MetricGroup,
         step: Optional[int] = None,
+        epoch: Optional[int] = None,
         advance: int = 0,
         reset: bool = False,
     ) -> Dict[str, float]:
@@ -166,12 +185,13 @@ class Melog:
 
         Args:
             group: MetricGroup 实例。
-            step: 全局步数，缺省时内部自增。
+            step: 当前 epoch 内的步数，缺省时内部自增。
+            epoch: 当前 epoch 序号，缺省沿用上一次传入的值。
             advance: 进度条前进步数，epoch 级记录默认不推进。
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """
         values = group.compute()
-        result = self.log(values, step=step, advance=advance)
+        result = self.log(values, step=step, epoch=epoch, advance=advance)
         if reset:
             group.reset()
         return result
@@ -198,9 +218,9 @@ class Melog:
         if self._web is not None:
             self._web.set_colors(dict(self._colors))
 
-    def _push_web(self, step: int, metrics: Dict[str, float]) -> None:
+    def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
         if self._web is not None:
-            self._web.publish(step, metrics)
+            self._web.publish(step, metrics, epoch=epoch)
 
     def _update_progress(self, metrics: Dict[str, float]) -> None:
         if self._progress is not None:

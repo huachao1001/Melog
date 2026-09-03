@@ -399,7 +399,7 @@ class Melog:
 
     # ------------------------------------------------------------------ 控制台消息
     def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀。
+        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [HH:MM:SS] 时间戳前缀。
 
         实例存活期间官方 print 被拦截到本方法；多个参数自动转 str()
         后以 sep 拼接。
@@ -407,15 +407,15 @@ class Melog:
         self._console.log(*values, sep=sep, end=end, flush=flush)
 
     def success(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """绿色文字 + ✔ 前缀。"""
+        """绿色文字 + ✔ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
         self._console.success(*values, sep=sep, end=end, flush=flush)
 
     def error(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """红色文字 + ✘ 前缀。"""
+        """红色文字 + ✘ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
         self._console.error(*values, sep=sep, end=end, flush=flush)
 
     def warn(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """黄色文字 + ⚠ 前缀。"""
+        """黄色文字 + ⚠ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
         self._console.warn(*values, sep=sep, end=end, flush=flush)
 
     def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:

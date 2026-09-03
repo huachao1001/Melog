@@ -57,6 +57,24 @@ def test_console_messages(tmp_path):
     assert "\x1b[" not in text               # 非 TTY 无 ANSI
 
 
+def test_console_messages_timestamped(tmp_path):
+    """log/success/error/warn 自动带 [HH:MM:SS] 时间戳前缀；空内容不加。"""
+    import re
+
+    saved = sys.stdout
+    m = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
+    try:
+        m.log("hello")
+        print()             # 拦截后的空行：不带时间戳
+    finally:
+        m.close()
+    assert sys.stdout is saved
+    text = read_log(tmp_path)
+    stamps = re.findall(r"\[\d{2}:\d{2}:\d{2}\] hello\n", text)
+    assert len(stamps) == 1  # 时间戳前缀格式正确且只出现一次
+    assert text.endswith("\n\n") or text.count("\n\n") >= 1  # 空行原样落盘
+
+
 def test_print_intercepted_to_log(tmp_path):
     """官方 print 被拦截改走 log；close 后还原；file 指定时走原生 print。"""
     saved, orig_print = sys.stdout, builtins.print

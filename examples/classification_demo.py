@@ -73,8 +73,8 @@ def main():
 
     try:
         for epoch in range(EPOCHS):
-            # 每个 epoch 一条进度条；每 LOG_EVERY 步才 log 一次，step 需显式传
-            for step in logger.progress(range(STEPS)):
+            # 每个 epoch 一条进度条并绑定 epoch；坐标（epoch/step）自动管理
+            for step in logger.stepsbar(range(STEPS), epoch=epoch):
                 g = epoch * STEPS + step  # 全局步数：模型能力按它增长
                 logits, labels = simulate_batch(g, rng)
                 loss = 1.8 * math.exp(-g / 180) + 0.4 + rng.gauss(0, 0.02)
@@ -82,9 +82,8 @@ def main():
                 if step % LOG_EVERY == LOG_EVERY - 1:
                     out = metrics.compute()
                     # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
-                    # 传入 epoch + 当前 epoch 的 step：曲线上标注 epoch 分界
-                    logger.scalar({k: v for k, v in out.items() if v == v},
-                               epoch=epoch, step=step)
+                    # 记录自动依附当前 epoch 与下一个空槽
+                    logger.scalar({k: v for k, v in out.items() if v == v})
                     metrics.reset()
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:

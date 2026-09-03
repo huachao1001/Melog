@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from ..distributed import gather_object
 from .base import BatchMetric, Metric
@@ -27,28 +27,14 @@ class MetricGroup:
 
     def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
         self._metrics: Dict[str, Metric] = dict(metrics or {})
+        # 每次 feed() 后触发的回调（由 logger 挂载，用于进度条实时显示本地值）
+        self._on_feed: Optional[Callable[[], None]] = None
 
     def add(self, name: str, metric: Metric) -> "MetricGroup":
         if name in self._metrics:
             raise KeyError(f"指标重复注册: {name}")
         self._metrics[name] = metric
         return self
-
-    def update(self, **kwargs: Any) -> None:
-        """按名字分发观测值。
-
-        Args:
-            **kwargs: 指标名 -> 观测值；需要按指标加权时传元组
-                (值, 权重)，如 loss=(3.2, token_num)。
-        """
-        for name, value in kwargs.items():
-            metric = self._metrics.get(name)
-            if metric is None:
-                raise KeyError(f"未注册的指标: {name}")
-            if isinstance(value, tuple):
-                metric.update(*value)
-            else:
-                metric.update(value)
 
     def feed(self, **batch: Any) -> None:
         """把一个 batch 的全部观测喂给整组指标，分发由框架完成。
@@ -61,13 +47,23 @@ class MetricGroup:
         """
         for name, metric in self._metrics.items():
             if isinstance(metric, BatchMetric):
-                metric.update(**batch)
+                metric.feed(**batch)
             elif name in batch:
                 value = batch[name]
                 if isinstance(value, tuple):
-                    metric.update(*value)
+                    metric.feed(*value)
                 else:
-                    metric.update(value)
+                    metric.feed(value)
+        if self._on_feed is not None:
+            self._on_feed()
+
+    def local(self) -> Dict[str, Any]:
+        """当前 rank 的本地指标值（零通信，不触发跨 rank 收集），供实时显示。
+
+        等价于把本 rank 状态单方面合并：无观测的指标为 NaN；返回矩阵的
+        指标（如 ConfusionMatrix）原样返回，调用方可按需过滤。
+        """
+        return {name: m.merge_states([m.state()]) for name, m in self._metrics.items()}
 
     def compute(self) -> Dict[str, Any]:
         """同步合并组内全部指标并返回全局结果。

@@ -20,7 +20,7 @@ def main():
     # 官方 print 被拦截，内部改走 log()（自动同步 console.log）
     print("这行是用官方 print 打的，内部已改走 log()")
 
-    for step in logger.progress(range(30)):
+    for step in logger.stepsbar(range(30)):
         logger.scalar({"loss": 1.0 / (step + 1)})
         time.sleep(0.05)
 

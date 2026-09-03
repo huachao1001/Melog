@@ -220,34 +220,37 @@ def logger(tmp_path):
 
 
 def test_image_attaches_to_last_scalar_position(logger):
-    logger.scalar({"loss": 1.0}, epoch=2, step=7)
+    for _ in logger.stepsbar(range(1), epoch=2):
+        logger.scalar({"loss": 1.0})  # x=0, epoch 2
     logger.image("pred", np.zeros((4, 4), dtype=np.uint8))
     entries = logger.media.snapshot()["image"]["pred"]
-    assert entries[0]["step"] == 7 and entries[0]["epoch"] == 2
-    # 不推进 step 计数
+    assert entries[0]["step"] == 0 and entries[0]["epoch"] == 2
+    # 附着不推进 step 计数
     logger.scalar({"loss": 2.0})
-    assert logger.store.snapshot()["loss"][-1]["step"] == 8
+    assert logger.store.snapshot()["loss"][-1]["step"] == 1
 
 
-def test_media_explicit_position_and_files(logger):
+def test_media_attach_position_and_files(logger):
     logger.scalar({"loss": 1.0})
+    logger.scalar({"loss": 2.0})
     img = np.full((3, 3, 3), 200, dtype=np.uint8)
     audio = np.zeros(100, dtype=np.float64)
-    logger.image("sample/a", img, step=42, epoch=1)
-    logger.audio("sample/a", audio, sr=8000, step=42, epoch=1)
+    logger.image("sample/a", img)
+    logger.audio("sample/a", audio, sr=8000)
 
     media_root = logger.run_dir / "media"
-    assert (media_root / "image/sample/a/000000042.png").is_file()
-    assert (media_root / "audio/sample/a/000000042.wav").is_file()
+    assert (media_root / "image/sample/a/000000001.png").is_file()
+    assert (media_root / "audio/sample/a/000000001.wav").is_file()
 
     recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
-    img_rec, aud_rec = recs[-2], recs[-1]
-    assert img_rec == {"type": "image", "metric": "sample/a", "step": 42, "epoch": 1,
-                       "file": "media/image/sample/a/000000042.png"}
+    img_rec = next(r for r in recs if r.get("type") == "image")
+    aud_rec = next(r for r in recs if r.get("type") == "audio")
+    assert img_rec == {"type": "image", "metric": "sample/a", "step": 1,
+                       "file": "media/image/sample/a/000000001.png"}
     assert aud_rec["type"] == "audio" and aud_rec["sr"] == 8000
 
     snap = logger.media.snapshot()
-    assert snap["image"]["sample/a"][0]["file"] == "media/image/sample/a/000000042.png"
+    assert snap["image"]["sample/a"][0]["file"] == "media/image/sample/a/000000001.png"
     assert snap["audio"]["sample/a"][0]["sr"] == 8000
 
 
@@ -257,36 +260,34 @@ def test_media_before_any_scalar_defaults_to_zero(logger):
     assert entries[0]["step"] == 0 and "epoch" not in entries[0]
 
 
-def test_media_explicit_step_is_epoch_internal(logger):
-    """epoch 模式下媒体坐标与 scalar() 同规则：x = epoch 基准 + epoch 内步数。"""
-    logger.scalar({"loss": 1.0}, epoch=0, step=9)   # epoch0 基准 0，推进全局 x 到 10
-    logger.scalar({"loss": 1.0}, epoch=1, step=4)   # epoch1 基准 10 → x=14
-    # 只给 epoch 不给 step：附着该 epoch 最近一次记录的位置
-    logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=1)
-    assert logger.media.snapshot()["image"]["pred"][0]["step"] == 14
-    # 显式 step：按 epoch 内步数精确定位
-    logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=1, step=5)
-    assert logger.media.snapshot()["image"]["pred"][-1]["step"] == 15
-    # 不推进任何计数器：下一次 scalar 仍在 epoch1 的 step 5
+def test_media_attaches_to_bound_epoch_position(logger):
+    """epoch 模式下媒体附着最近一次提交位置：x = epoch 基准 + epoch 内步数。"""
+    for _ in logger.stepsbar(range(2), epoch=0):
+        logger.scalar({"loss": 1.0})  # epoch0: x=0,1
+    for _ in logger.stepsbar(range(1), epoch=1):
+        logger.scalar({"loss": 1.0})  # epoch1 基准 2 → x=2
+    logger.image("pred", np.zeros((2, 2), dtype=np.uint8))
+    entry = logger.media.snapshot()["image"]["pred"][0]
+    assert entry["step"] == 2 and entry["epoch"] == 1
+    # 附着不推进任何计数器：下一次 scalar 仍在 epoch1 的下一空槽
     logger.scalar({"loss": 2.0})
     rec = logger.store.snapshot()["loss"][-1]
-    assert rec["step"] == 15 and rec["epoch"] == 1
-    # 显式标注过去的 epoch：按该 epoch 自己的基准定位
-    logger.image("pred", np.zeros((2, 2), dtype=np.uint8), epoch=0, step=2)
-    assert logger.media.snapshot()["image"]["pred"][0]["step"] == 2
+    assert rec["step"] == 3 and rec["epoch"] == 1
 
 
 def test_media_caption_roundtrip(logger):
     """caption 随记录贯通：journal / 内存索引 / 历史解析；无配文则不写该字段。"""
-    logger.image("cap/img", np.zeros((2, 2), dtype=np.uint8),
-                     step=1, epoch=0, caption="第一张\n说明文字")
-    logger.image("cap/img", np.ones((2, 2), dtype=np.uint8), step=2)
-    logger.audio("cap/tone", np.zeros(10), sr=8000, step=1, caption="转写文本")
+    logger.scalar({"loss": 1.0})  # 提交 x=0
+    logger.image("cap/img", np.zeros((2, 2), dtype=np.uint8), caption="第一张\n说明文字")
+    logger.scalar({"loss": 2.0})  # 提交 x=1，两张图落在不同 step
+    logger.image("cap/img", np.ones((2, 2), dtype=np.uint8))
+    logger.audio("cap/tone", np.zeros(10), sr=8000, caption="转写文本")
 
     recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
-    assert recs[-3]["caption"] == "第一张\n说明文字"
-    assert "caption" not in recs[-2]  # 无配文的条目不带该字段
-    assert recs[-1]["caption"] == "转写文本"
+    media_recs = [r for r in recs if "type" in r]
+    assert media_recs[0]["caption"] == "第一张\n说明文字"
+    assert "caption" not in media_recs[1]  # 无配文的条目不带该字段
+    assert media_recs[2]["caption"] == "转写文本"
 
     snap = logger.media.snapshot()
     assert snap["image"]["cap/img"][0]["caption"] == "第一张\n说明文字"

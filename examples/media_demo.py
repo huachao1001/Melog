@@ -6,10 +6,9 @@
 - 图像页签：sample/grid 卡片——滑杆回放各 step 的图像，点击看原图
 - 音频页签：sample/tone 卡片——播放随训练由沙哑变纯净的音色
 
-媒体接口：
-    logger.image("名字", 图片路径/PIL/numpy/torch, step=?, epoch=?)
-    logger.audio("名字", 音频路径/numpy/torch, sr=采样率, step=?, epoch=?)
-step/epoch 缺省时自动附着到最近一次 scalar() 的位置（本示例即这种用法）。
+媒体接口（坐标自动依附最近一次 scalar() / log_group() 的记录处，本示例即这种用法）：
+    logger.image("名字", 图片路径/PIL/numpy/torch, caption=配文)
+    logger.audio("名字", 音频路径/numpy/torch, sr=采样率, caption=配文)
 
 Ctrl+C 停止。
 """
@@ -59,11 +58,12 @@ def main():
     total = EPOCHS * STEPS
     try:
         for epoch in range(EPOCHS):
-            # tqdm 风格：包裹可迭代对象即自动推进，scalar() 指标实时显示在条上
-            for step in logger.progress(range(STEPS)):
+            # tqdm 风格：包裹可迭代对象即自动推进，scalar() 指标实时显示在条上；
+            # epoch 交给 stepsbar 绑定，曲线自动标注 epoch 分界
+            for step in logger.stepsbar(range(STEPS), epoch=epoch):
                 g = epoch * STEPS + step
                 loss = 1.6 * math.exp(-g / 80) + 0.2
-                logger.scalar({"loss": loss}, epoch=epoch)
+                logger.scalar({"loss": loss})
                 if g % IMG_EVERY == 0:
                     # caption：随图显示的配文（textContent 渲染，支持换行）
                     logger.image("sample/grid", make_image(g, total),

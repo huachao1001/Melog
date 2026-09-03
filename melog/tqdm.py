@@ -143,6 +143,7 @@ class tqdm:
         self.on_close = on_close
         self.n = 0
         self.postfix: dict = {}
+        self.covered = False  # 被上层 bar 覆盖时暂停渲染（计数与 postfix 照常更新）
         self._value_w: Dict[str, int] = {}  # 各指标值的历史最宽字符数（定宽右对齐用）
 
         self._t0 = time.monotonic()
@@ -166,6 +167,8 @@ class tqdm:
         if self.disable or self._closed or not n:
             return
         self.n += n
+        if self.covered:
+            return
         now = time.monotonic()
         if now - self._last_render >= self.mininterval:
             self.render()
@@ -182,7 +185,7 @@ class tqdm:
             self.postfix.update(ordered_dict)
         if kwargs:
             self.postfix.update(kwargs)
-        if not self.disable and not self._closed:
+        if not self.disable and not self._closed and not self.covered:
             self.render()
 
     @classmethod
@@ -194,7 +197,7 @@ class tqdm:
 
     def refresh(self) -> None:
         """立即重绘（绕过 mininterval）。"""
-        if not self.disable and not self._closed:
+        if not self.disable and not self._closed and not self.covered:
             self.render()
 
     def close(self) -> None:

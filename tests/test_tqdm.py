@@ -212,11 +212,11 @@ def test_tqdm_color_on_tty_plain_on_pipe():
 
 
 def test_melog_progress_iterates_and_autoupdates(tmp_path):
-    """progress() 包裹可迭代对象：迭代自动推进，scalar() 指标显示在条尾。"""
+    """stepsbar() 包裹可迭代对象：迭代自动推进，scalar() 指标显示在条尾。"""
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        items = list(logger.progress(range(3), epoch=0))
+        items = list(logger.stepsbar(range(3), epoch=0))
         assert items == [0, 1, 2]
     finally:
         logger.close()
@@ -229,11 +229,11 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
 
 
 def test_melog_progress_shows_log_postfix(tmp_path):
-    """progress() 期间 scalar() 的指标经 postfix 实时写进 console.log。"""
+    """stepsbar() 期间 scalar() 的指标经 postfix 实时写进 console.log。"""
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        for _ in logger.progress(range(2)):
+        for _ in logger.stepsbar(range(2)):
             logger.scalar({"loss": 0.5})
     finally:
         logger.close()
@@ -245,23 +245,50 @@ def test_melog_progress_reusable_across_epochs(tmp_path):
     """进度条自然结束后自动解除登记，同一 Melog 可再次 progress()。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        first = list(logger.progress(range(2), epoch=0))
-        second = list(logger.progress(range(2), epoch=1))
+        first = list(logger.stepsbar(range(2), epoch=0))
+        second = list(logger.stepsbar(range(2), epoch=1))
         assert first == [0, 1] and second == [0, 1]
     finally:
         logger.close()
 
 
-def test_melog_progress_nesting_rejected(tmp_path):
-    """progress() 进行中不允许再开新进度条；close 后解除登记可再建。"""
+def test_melog_progress_nesting_stack(tmp_path):
+    """stepsbar() 允许嵌套（栈管理）：栈顶为当前环境，关闭后自动恢复下层。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        bar = logger.progress(range(3))
-        with pytest.raises(RuntimeError):
-            logger.progress(range(3))
+        assert logger.current_bar() is None
+        outer = logger.stepsbar(range(3), epoch=0)
+        inner = logger.stepsbar(range(2), epoch=0)
+        assert logger.current_bar() is inner
+        assert outer.covered and not inner.covered  # 只有栈顶渲染
+
+        logger.scalar({"loss": 1.0})  # postfix 作用于栈顶
+        assert inner.postfix.get("loss") == pytest.approx(1.0)
+        assert "loss" not in outer.postfix
+
+        inner.close()  # 栈顶关闭：出栈并恢复下层渲染与登记
+        assert logger.current_bar() is outer
+        assert not outer.covered
+        logger.scalar({"loss": 2.0})
+        assert outer.postfix.get("loss") == pytest.approx(2.0)
+
+        outer.close()
+        assert logger.current_bar() is None
+    finally:
+        logger.close()
+
+
+def test_melog_current_bar_module_level(tmp_path):
+    """模块级 current_bar()：任意位置取当前栈顶 bar，免层层传参。"""
+    import melog as pkg
+
+    logger = pkg.init(tmp_path / "cb", enable_web=False)
+    try:
+        assert pkg.current_bar() is None
+        bar = logger.stepsbar(range(2))
+        assert pkg.current_bar() is bar
         bar.close()
-        # close 后解除登记，可再次创建
-        list(logger.progress(range(1)))
+        assert pkg.current_bar() is None
     finally:
         logger.close()
 
@@ -270,7 +297,7 @@ def test_melog_log_advance_opt_in(tmp_path):
     """scalar(advance=N) 可选推进进度条；缺省 0（progress() 迭代已自动推进）。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        bar = logger.progress(range(5))
+        bar = logger.stepsbar(range(5))
         logger.scalar({"loss": 1.0})
         assert bar.n == 0
         logger.scalar({"loss": 1.0}, advance=2)
@@ -294,7 +321,7 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
         assert sys.stdout is not saved_stdout  # 已接管
-        for _ in logger.progress(range(2)):
+        for _ in logger.stepsbar(range(2)):
             logger.scalar({"loss": 0.5})
             print("step done")
     finally:
@@ -312,7 +339,7 @@ def test_melog_console_log_progress_line_uses_cr(tmp_path):
     """日志文件里的进度条行以 \\r 结尾（不可见空白字符标记），定稿后变 \\n。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        for _ in logger.progress(range(1)):
+        for _ in logger.stepsbar(range(1)):
             # 迭代中途：最后一行应为 \r 结尾的进度条行
             path = next((tmp_path / "t").glob("**/console.log"))
             assert path.read_bytes().endswith(b"\r")

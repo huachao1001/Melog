@@ -40,23 +40,22 @@ def main():
     )
 
     for epoch in range(EPOCHS):
-        for step in logger.progress(range(STEPS), epoch=epoch):
+        # metrics=...：bar 实时显示本卡本地值（零通信）；迭代自然结束时
+        # gather 合并全局值落盘并 reset（提前 break / 异常不触发）
+        for step in logger.stepsbar(range(STEPS), epoch=epoch, metrics=metrics, reset=True):
             # 模拟各 GPU 有差异的本地观测
             base = 2.0 * math.exp(-step / 60) + 0.05
             local_loss = base + 0.01 * (rank + 1) * math.sin(step / 9 + rank)
             local_acc = 1 - local_loss / 2.1
 
             # 只需累积本地值；跨 GPU 合并在 compute() 内自动完成
-            metrics.update(
+            metrics.feed(
                 loss=local_loss,
                 acc=local_acc,
                 seen=16 + step % 8,
                 lr=1e-3 * (0.98 ** (epoch * STEPS + step)),
             )
             time.sleep(0.02)
-
-        # epoch 末：所有 rank 统一调用，得到全局一致结果；记录后重置
-        logger.log_group(metrics, reset=True)
 
     if rank == 0:
         print(f"指标已落盘: {logger.run_dir / 'metrics.melog'}")

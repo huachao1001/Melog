@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 from .distributed import get_rank, reduce_metrics
 from .media import sanitize_name, save_audio, save_image
@@ -39,13 +39,57 @@ _ORIG_PRINT = None
 _PRINT_PATCHED: list = []
 
 
+class _EpochEndIterable:
+    """包装可迭代对象：仅在自然耗尽时触发一次回调（提前 break / 异常不触发）。
+
+    供 stepsbar(..., metrics=...) 实现 epoch 末自动记录。回调发生在最后
+    一个元素之后、StopIteration 传给进度条之前，此时进度条尚未关闭，
+    记录的指标值能渲染进 postfix。所有 rank 都会执行回调（compute() 是
+    集合操作，各 rank 必须在同一位置调用；落盘与展示由 log_group 内部
+    仅 rank0 处理）。
+    """
+
+    def __init__(self, iterable: Iterable, on_end: Callable[[], None]):
+        self._src = iterable
+        self._it = iter(iterable)
+        self._on_end = on_end
+        self._fired = False
+
+    def __iter__(self) -> "_EpochEndIterable":
+        return self
+
+    def __next__(self) -> Any:
+        try:
+            return next(self._it)
+        except StopIteration:
+            if not self._fired:
+                self._fired = True
+                self._on_end()
+            raise
+
+    def __len__(self) -> int:
+        # 透传 len()，tqdm 才能自动取 total（无 len 时 TypeError 由 tqdm 捕获）
+        return len(self._src)  # type: ignore[arg-type]
+
+
+class _BarFrame:
+    """stepsbar 栈帧：一条打开的进度条及其挂载的指标组。"""
+
+    __slots__ = ("bar", "metrics")
+
+    def __init__(self, bar: tqdm, metrics: Optional[MetricGroup]):
+        self.bar = bar
+        self.metrics = metrics
+
+
 class _Axis:
     """训练坐标轴：全局 x 与 epoch 内步数的唯一裁决者。
 
-    坐标规则（scalar 写入与媒体定位共用同一实现，避免规则漂移）：
-    - 未启用 epoch：step 即全局 x
-    - epoch 模式：step 为 epoch 内步数，x = 该 epoch 的全局基准 + step；
-      epoch 内步数缺省内部自增，全局 x 跨 epoch 连续接续
+    坐标不接受手动指定，完全由 stepsbar 驱动（scalar 写入与媒体定位
+    共用同一实现，避免规则漂移）：
+    - 未绑定 epoch（没用 stepsbar(epoch=...)）：x 即全局提交计数
+    - epoch 模式：x = 该 epoch 的全局基准 + epoch 内已提交步数；
+      步数每次提交自增，全局 x 跨 epoch 连续接续
 
     写入型记录（scalar）走 resolve_commit + commit，会推进计数器；
     附着型记录（媒体）走 resolve_attach，只读、绝不推进任何计数。
@@ -71,33 +115,21 @@ class _Axis:
             self.epoch_step = 0
             self.bases[epoch] = self.step
 
-    def resolve_commit(self, step: Optional[int] = None) -> "tuple[int, Optional[int]]":
-        """scalar 写入位置：缺省取下一个空槽（epoch 模式为 epoch 内步数）。"""
+    def resolve_commit(self) -> "tuple[int, Optional[int]]":
+        """scalar 写入位置：下一个空槽（epoch 模式为 epoch 内步数）。"""
         if self.epoch is None:
-            return (step if step is not None else self.step), None
-        s = step if step is not None else self.epoch_step
-        return self.base + s, self.epoch
+            return self.step, None
+        return self.base + self.epoch_step, self.epoch
 
-    def resolve_attach(self, step: Optional[int] = None,
-                       epoch: Optional[int] = None) -> "tuple[int, Optional[int]]":
-        """媒体附着位置：缺省附着最近一次记录；显式传 step 则精确定位。"""
-        if step is None and epoch is None:
-            return self.last_x, self.last_epoch
-        e = epoch if epoch is not None else self.epoch
-        if e is None:
-            return (step if step is not None else self.last_x), None
-        if step is not None:
-            return self.bases.get(e, self.base) + step, e
-        # 只给 epoch：最近记录属于该 epoch 则附着之，否则取该 epoch 当前槽位
-        if self.last_epoch == e:
-            return self.last_x, e
-        return self.bases.get(e, self.base) + self.epoch_step, e
+    def resolve_attach(self) -> "tuple[int, Optional[int]]":
+        """媒体附着位置：最近一次 scalar() 的提交位置（只读，不推进计数）。"""
+        return self.last_x, self.last_epoch
 
-    def commit(self, x: int, epoch: Optional[int], step: Optional[int]) -> None:
+    def commit(self, x: int, epoch: Optional[int]) -> None:
         """scalar 记录后推进计数器（附着型记录不调用）。"""
         self.last_x, self.last_epoch = x, epoch
         if epoch is not None:
-            self.epoch_step = (step + 1) if step is not None else self.epoch_step + 1
+            self.epoch_step += 1
         self.step = x + 1
 
 
@@ -107,7 +139,7 @@ class Melog:
     用法：
         >>> import melog
         >>> logger = melog.init(log_dir="runs/demo")
-        >>> for step in logger.progress(range(100)):
+        >>> for step in logger.stepsbar(range(100)):
         ...     logger.scalar({"loss": loss})
     """
 
@@ -164,7 +196,7 @@ class Melog:
             )
             self._web.start()
 
-        self._progress: Optional[tqdm] = None
+        self._bars: List[_BarFrame] = []  # 打开中的进度条栈（栈顶 = 当前环境）
         # 控制台日志镜像（仅 rank0）：进度条与 print 同步写入 console.log
         self.mirror: Optional[Mirror] = None
         if self._is_primary:
@@ -200,76 +232,144 @@ class Melog:
         return self._web.url if self._web is not None else None
 
     # ------------------------------------------------------------------ 训练上下文
-    def progress(
+    def stepsbar(
         self,
         iterable: Iterable,
         total: Optional[float] = None,
         epoch: Optional[int] = None,
+        metrics: Optional[MetricGroup] = None,
+        reset: bool = False,
         **kwargs: Any,
     ) -> tqdm:
         """tqdm 风格进度条：直接包裹可迭代对象，迭代时自动推进，无需手动 update。
 
+        本库按 epoch 组织训练记录：**每个 epoch 的循环必须用 stepsbar
+        包裹**并传入 epoch，坐标（epoch/step）由它统一管理——scalar() /
+        log_group() / image() / audio() 都没有坐标参数，记录自动依附
+        当前 epoch 与下一个空槽；不用 stepsbar 包裹的记录退化为全局
+        自增 x、无 epoch 分界。
+
         用法与 tqdm.tqdm 一致::
 
-            for batch in logger.progress(loader):
+            for batch in logger.stepsbar(loader):
                 logger.scalar({"loss": loss})   # 指标实时显示在进度条上
 
         传入 epoch 时，进入进度条即绑定该 epoch（epoch 内步数清零、全局
-        x 从上一位置接续），bar 内的 scalar() / log_group() 无需再传
-        epoch，bar 结束后沿用，直至下一个 epoch；行首描述自动标为
-        "epoch N"（需自定义时透传 tqdm 的 desc=...）::
+        x 从上一位置接续），bar 结束后沿用，直至下一个 epoch；行首描述
+        自动标为 "epoch N"（需自定义时透传 tqdm 的 desc=...）::
 
             for epoch in range(epochs):
-                for _ in logger.progress(loader, epoch=epoch):
-                    logger.scalar({"loss": loss})
+                for _ in logger.stepsbar(loader, epoch=epoch):
+                    logger.scalar({"loss": loss})   # 坐标自动依附 epoch
+
+        传入 metrics（MetricGroup）时，进度条实时显示本卡本地值——每次
+        feed() 后零通信刷新 postfix（实际渲染的只有 rank0，即主卡本地
+        值；无观测的指标与非数值结果自动跳过）。迭代自然结束即 gather
+        所有 rank 的状态、log_group 全局值一次（reset=True 则记录后重
+        置组内指标），曲线上得到跨 GPU 精确合并的结果::
+
+            for _ in logger.stepsbar(loader, epoch=e, metrics=metrics, reset=True):
+                metrics.feed(...)
+
+        自动记录仅在循环自然跑完时触发：提前 break / 抛异常不会记录
+        （此时各 rank 的进度可能不一致，自动 compute() 的 all_gather 会
+        互相等待甚至挂死；需要中途落盘请显式调用 scalar() / log_group()）。
+        所有 rank 都会触发回调，compute() 在各 rank 同一位置执行，落盘
+        仅 rank0。
 
         total 缺省时自动取 len(iterable)。进度条实时渲染到控制台，并经
         Mirror 同步进 console.log；非 rank0 或设置 MELOG_DISABLE_PROGRESS=1
-        时静默。迭代自然结束后自动解除登记，可再次调用 progress()（如
-        每个 epoch 一条进度条）。
+        时静默。迭代自然结束后自动出栈，可再次调用 stepsbar()（如每个
+        epoch 一条进度条）。
+
+        允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，current_bar()
+        返回栈顶即当前环境；scalar() / log_group() 的 postfix 与 advance
+        自动作用于栈顶，下层 bar 暂停渲染（计数与 postfix 照常更新），
+        栈顶关闭后自动恢复下层渲染。提前 break 的 bar 请 close()（或用
+        with 包裹），否则会一直留在栈中占位。
         """
-        if self._progress is not None:
-            raise RuntimeError("progress() 上下文不可嵌套")
+        if metrics is not None and not isinstance(metrics, MetricGroup):
+            raise TypeError(f"metrics 须为 MetricGroup，收到 {type(metrics).__name__}")
         if epoch is not None:
             with self._lock:
                 self._axis.bind_epoch(epoch)
+        if metrics is not None:
+            iterable = _EpochEndIterable(
+                iterable, lambda: self.log_group(metrics, reset=reset)
+            )
         disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
         if epoch is not None and "desc" not in kwargs:
             kwargs["desc"] = f"epoch {epoch}"
         bar = tqdm(iterable=iterable, total=total, disable=disable, **kwargs)
-        return self._register_progress(bar)
+        return self._register_progress(bar, metrics=metrics)
 
-    def _register_progress(self, bar: tqdm) -> tqdm:
-        """登记当前进度条（scalar() 的 postfix/advance 作用其上），关闭后自动解除。"""
-        self._progress = bar
+    def current_bar(self) -> Optional[tqdm]:
+        """当前栈顶进度条（无打开的 bar 时为 None）。
+
+        stepsbar() 允许嵌套、以栈管理：scalar() / log_group() 的 postfix
+        与 advance 自动作用于栈顶；深层函数需要手动推进、读数或写
+        postfix 时用它获取当前 bar，免层层传参。
+        """
+        with self._lock:
+            return self._bars[-1].bar if self._bars else None
+
+    def _register_progress(self, bar: tqdm, metrics: Optional[MetricGroup] = None) -> tqdm:
+        """压栈登记进度条（栈顶 = 当前环境），关闭后自动出栈。
+
+        挂载 metrics 时，feed() 的实时刷新只作用于自己的 bar（即使被
+        上层覆盖，postfix 数据照常更新，恢复渲染时可见）。
+        """
+        with self._lock:
+            for frame in self._bars:  # 覆盖下层：只有栈顶渲染
+                frame.bar.covered = True
+            self._bars.append(_BarFrame(bar, metrics))
+            if metrics is not None:
+                def _display_local() -> None:
+                    # 实时显示：本卡本地值，零通信；NaN 与非数值（如混淆矩阵）不上 postfix
+                    snap = {
+                        k: v
+                        for k, v in metrics.local().items()
+                        if isinstance(v, (int, float)) and v == v
+                    }
+                    bar.set_postfix(snap)
+
+                metrics._on_feed = _display_local
         bar.on_close = lambda: self._forget_progress(bar)
         return bar
 
     def _forget_progress(self, bar: tqdm) -> None:
-        if self._progress is bar:
-            self._progress = None
+        """bar 关闭：出栈并解除其指标组钩子；恢复新栈顶的渲染。"""
+        with self._lock:
+            for i, frame in enumerate(self._bars):
+                if frame.bar is bar:
+                    del self._bars[i]
+                    if frame.metrics is not None:
+                        frame.metrics._on_feed = None  # bar 已关闭，停止实时刷新
+                    break
+            if self._bars:
+                top = self._bars[-1].bar
+                top.covered = False
+                top.refresh()
 
     # ------------------------------------------------------------------ 记录指标
     def scalar(
         self,
         metrics: Dict[str, Union[float, int, Any]],
-        step: Optional[int] = None,
-        epoch: Optional[int] = None,
         advance: int = 0,
     ) -> Dict[str, float]:
-        """记录一批指标。
+        """记录一批指标；坐标（epoch/step）由 stepsbar 自动管理。
 
         多 GPU 场景下先做 all_reduce 合并（默认取均值），再由 rank0
         持久化、推送到 Web、刷新进度条。
 
+        坐标规则：epoch 由 stepsbar(epoch=...) 绑定，step 取 epoch 内
+        下一个空槽（内部自增，全局 x 跨 epoch 连续接续）；未用 stepsbar
+        时退化为全局自增。要控制记录粒度（每步 / 每 N 步窗口），调整
+        调用 scalar() 的频率即可，无需也无法手动指定坐标。
+
         Args:
             metrics: 指标名 -> 数值（float / int / 0 维 tensor）。
-            step: 当前 epoch 内的步数；未启用 epoch 时为全局步数，
-                缺省时内部自增（epoch 模式下每个 epoch 从 0 重新计步）。
-            epoch: 当前 epoch 序号，曲线图据此标注 epoch 分界；
-                缺省沿用当前绑定的 epoch（progress(epoch=...) 绑定或
-                上次显式传入），从未设置则不记录 epoch。
-            advance: 额外推进进度条的步数（progress() 迭代每次已自动
+            advance: 额外推进进度条的步数（stepsbar() 迭代每次已自动
                 推进 1，缺省 0；仅一个迭代内多次 scalar() 等场景需要传入）。
         Returns:
             合并后的指标（rank>0 也返回，便于本地打印）。
@@ -280,16 +380,14 @@ class Melog:
             return merged
 
         with self._lock:
-            if epoch is not None:
-                self._axis.bind_epoch(epoch)
-            x, out_epoch = self._axis.resolve_commit(step)
+            x, out_epoch = self._axis.resolve_commit()
             self.store.add(x, merged, out_epoch)
             self._push_web(x, merged, out_epoch)
             self._update_progress(merged)
-            if advance and self._progress is not None:
-                self._progress.update(advance)
+            if advance and self._bars:
+                self._bars[-1].bar.update(advance)
             self._maybe_flush()
-            self._axis.commit(x, out_epoch, step)
+            self._axis.commit(x, out_epoch)
         return merged
 
     # 兼容 wandb 风格别名
@@ -300,8 +398,6 @@ class Melog:
         self,
         name: str,
         data: Any,
-        step: Optional[int] = None,
-        epoch: Optional[int] = None,
         caption: Optional[str] = None,
     ) -> None:
         """记录一帧图像（曲线图之外的"图像"页签展示）。
@@ -313,12 +409,11 @@ class Melog:
             name: 图像名，支持 "train/sample" 层级命名（页面按名建卡片）。
             data: 文件路径 / PIL.Image / numpy / torch 张量
                 （(H,W) 灰度或 (H,W,C)，C=1/3/4；浮点自动映射 0-255）。
-            step / epoch: 显式指定展示位置，语义与 scalar() 一致（epoch
-                模式下 step 为 epoch 内步数）；缺省附着到最近一次
-                scalar() 的位置。均不推进 step 计数。
             caption: 配文，随图显示在卡片上（如样本说明、预测对比）。
+
+        位置自动附着到最近一次 scalar() / log_group() 的记录处，不推进计数。
         """
-        self._log_media("image", name, data, step=step, epoch=epoch, caption=caption,
+        self._log_media("image", name, data, caption=caption,
                         save=lambda out_dir, stem: save_image(data, out_dir, stem))
 
     def audio(
@@ -326,8 +421,6 @@ class Melog:
         name: str,
         data: Any,
         sr: int = 22050,
-        step: Optional[int] = None,
-        epoch: Optional[int] = None,
         caption: Optional[str] = None,
     ) -> None:
         """记录一段音频（"音频"页签展示，浏览器内直接播放）。
@@ -337,22 +430,21 @@ class Melog:
             data: 文件路径（wav/mp3/flac 等按原格式复制）/ numpy / torch
                 波形（(N,) 单声道或 (N, 声道数)；浮点按 [-1,1] 裁剪）。
             sr: 采样率（data 为路径时忽略，沿用文件本身格式）。
-            step / epoch: 显式指定展示位置，语义与 scalar() 一致（epoch
-                模式下 step 为 epoch 内步数）；缺省附着到最近一次
-                scalar() 的位置。均不推进 step 计数。
             caption: 配文，随音频显示在卡片上（如转写文本、听感说明）。
+
+        位置自动附着到最近一次 scalar() / log_group() 的记录处，不推进计数。
         """
-        self._log_media("audio", name, data, step=step, epoch=epoch, sr=sr, caption=caption,
+        self._log_media("audio", name, data, sr=sr, caption=caption,
                         save=lambda out_dir, stem: save_audio(data, out_dir, stem, sr))
 
-    def _log_media(self, kind: str, name: str, data: Any, save, step, epoch,
+    def _log_media(self, kind: str, name: str, data: Any, save,
                    sr=None, caption=None) -> None:
         """媒体记录公共流程：定位 -> 落盘 -> 索引 -> 日志 -> 推送。"""
         if not self._is_primary:
             return
         safe = sanitize_name(name)
         with self._lock:
-            x, e = self._axis.resolve_attach(step, epoch)
+            x, e = self._axis.resolve_attach()
             rel = f"media/{kind}/{safe}/{save(self._run_dir / 'media' / kind / safe, f'{int(x):09d}')}"
             record: Dict[str, Any] = {"type": kind, "metric": name, "step": int(x), "file": rel}
             if e is not None:
@@ -379,25 +471,21 @@ class Melog:
     def log_group(
         self,
         group: MetricGroup,
-        step: Optional[int] = None,
-        epoch: Optional[int] = None,
         advance: int = 0,
         reset: bool = False,
     ) -> Dict[str, float]:
         """记录一组 Metric 指标（跨 GPU 同步由 group.compute() 内部完成）。
 
-        所有 rank 都应调用本方法；仅 rank0 持久化与展示。
+        所有 rank 都应调用本方法；仅 rank0 持久化与展示。坐标自动依附
+        当前绑定的 epoch（stepsbar）与下一个空槽。
 
         Args:
             group: MetricGroup 实例。
-            step: 当前 epoch 内的步数，缺省时内部自增。
-            epoch: 当前 epoch 序号，缺省沿用当前绑定的 epoch
-                （progress(epoch=...) 绑定或上次显式传入）。
             advance: 额外推进进度条的步数，epoch 级记录默认不推进。
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """
         values = group.compute()
-        result = self.scalar(values, step=step, epoch=epoch, advance=advance)
+        result = self.scalar(values, advance=advance)
         if reset:
             group.reset()
         return result
@@ -486,8 +574,8 @@ class Melog:
             self._web.publish(step, metrics, epoch=epoch)
 
     def _update_progress(self, metrics: Dict[str, float]) -> None:
-        if self._progress is not None:
-            self._progress.set_postfix(metrics)
+        if self._bars:
+            self._bars[-1].bar.set_postfix(metrics)
 
     def _maybe_flush(self) -> None:
         self._pending += 1
@@ -516,9 +604,8 @@ class Melog:
         atexit.unregister(self.close)
         if self._is_primary:
             self._flush()
-        if self._progress is not None:
-            self._progress.close()
-            self._progress = None
+        while self._bars:  # 定稿所有打开中的进度条（栈顶先关，逐层恢复渲染）
+            self._bars[-1].bar.close()
         if self.mirror is not None:
             self._unpatch_print()
             self.mirror.unhook_stdio()
@@ -579,12 +666,10 @@ def init(log_dir: str = "./melog_runs", web_port: Optional[int] = None, **kwargs
 
 def scalar(
     metrics: Dict[str, Union[float, int, Any]],
-    step: Optional[int] = None,
-    epoch: Optional[int] = None,
     advance: int = 0,
 ) -> Dict[str, float]:
     """模块级便捷接口：等价于 ``current().scalar(...)``。"""
-    return current().scalar(metrics, step=step, epoch=epoch, advance=advance)
+    return current().scalar(metrics, advance=advance)
 
 
 def log(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
@@ -609,36 +694,35 @@ def warn(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> 
 
 def log_group(
     group: MetricGroup,
-    step: Optional[int] = None,
-    epoch: Optional[int] = None,
     advance: int = 0,
     reset: bool = False,
 ) -> Dict[str, float]:
     """模块级便捷接口：等价于 ``current().log_group(...)``。"""
-    return current().log_group(group, step=step, epoch=epoch, advance=advance, reset=reset)
+    return current().log_group(group, advance=advance, reset=reset)
+
+
+def current_bar() -> Optional[tqdm]:
+    """模块级便捷接口：等价于 ``current().current_bar()``。"""
+    return current().current_bar()
 
 
 def image(
     name: str,
     data: Any,
-    step: Optional[int] = None,
-    epoch: Optional[int] = None,
     caption: Optional[str] = None,
 ) -> None:
     """模块级便捷接口：等价于 ``current().image(...)``。"""
-    current().image(name, data, step=step, epoch=epoch, caption=caption)
+    current().image(name, data, caption=caption)
 
 
 def audio(
     name: str,
     data: Any,
     sr: int = 22050,
-    step: Optional[int] = None,
-    epoch: Optional[int] = None,
     caption: Optional[str] = None,
 ) -> None:
     """模块级便捷接口：等价于 ``current().audio(...)``。"""
-    current().audio(name, data, sr=sr, step=step, epoch=epoch, caption=caption)
+    current().audio(name, data, sr=sr, caption=caption)
 
 
 def set_colors(colors: Dict[str, str]) -> None:

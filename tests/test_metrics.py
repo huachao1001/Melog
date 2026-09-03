@@ -22,15 +22,15 @@ from melog.metrics import (
 # ---------------------------------------------------------------- 内置指标
 def test_mean_weighted():
     m = Mean()
-    m.update(1.0, 2)   # 权重 2
-    m.update(4.0, 2)
+    m.feed(1.0, 2)   # 权重 2
+    m.feed(4.0, 2)
     assert m.compute() == pytest.approx(2.5)
 
 
 def test_mean_default_weight():
     m = Mean()
     for v in (1.0, 2.0, 3.0):
-        m.update(v)
+        m.feed(v)
     assert m.compute() == pytest.approx(2.0)
 
 
@@ -43,9 +43,9 @@ def test_sum_last_count():
     last = Last()
     cnt = Count()
     for v in (3.0, 1.0, 2.0):
-        s.update(v)
-        last.update(v)
-        cnt.update()
+        s.feed(v)
+        last.feed(v)
+        cnt.feed()
     assert s.compute() == pytest.approx(6.0)
     assert last.compute() == pytest.approx(2.0)
     assert cnt.compute() == pytest.approx(3.0)
@@ -53,10 +53,10 @@ def test_sum_last_count():
 
 def test_reset():
     m = Mean()
-    m.update(5.0)
+    m.feed(5.0)
     m.reset()
     assert m.compute() != m.compute()  # 重置后为 NaN
-    m.update(2.0)
+    m.feed(2.0)
     assert m.compute() == pytest.approx(2.0)
 
 
@@ -69,7 +69,7 @@ def test_accepts_tensor_like():
             return self._v
 
     m = Mean()
-    m.update(FakeTensor(2.0), FakeTensor(4.0))
+    m.feed(FakeTensor(2.0), FakeTensor(4.0))
     assert m.compute() == pytest.approx(2.0)
 
 
@@ -81,7 +81,7 @@ class EpochAcc(Metric):
         self.correct = 0.0
         self.total = 0.0
 
-    def update(self, correct, total):
+    def feed(self, correct, total):
         self.correct += float(correct)
         self.total += float(total)
 
@@ -99,11 +99,11 @@ class EpochAcc(Metric):
 
 def test_custom_metric_epoch_level():
     acc = EpochAcc()
-    acc.update(8, 10)
-    acc.update(9, 10)
+    acc.feed(8, 10)
+    acc.feed(9, 10)
     assert acc.compute() == pytest.approx(0.85)
     acc.reset()
-    acc.update(5, 10)
+    acc.feed(5, 10)
     assert acc.compute() == pytest.approx(0.5)
 
 
@@ -119,8 +119,8 @@ class PairAcc(BatchMetric):
 
 def test_batch_metric_single_function():
     m = PairAcc()
-    m.update(logits=[0.9, 0.2, 0.7], labels=[1, 0, 0])  # 命中 2/3
-    m.update([0.1, 0.8], [0, 1])                        # 位置喂入亦可：命中 2/2
+    m.feed(logits=[0.9, 0.2, 0.7], labels=[1, 0, 0])  # 命中 2/3
+    m.feed([0.1, 0.8], [0, 1])                        # 位置喂入亦可：命中 2/2
     # 按样本数加权：全局 4/5，而非各 batch 平均值的平均
     assert m.compute() == pytest.approx(4 / 5)
 
@@ -128,7 +128,7 @@ def test_batch_metric_single_function():
 def test_batch_metric_empty_and_reset():
     m = PairAcc()
     assert m.compute() != m.compute()  # 无观测 -> NaN
-    m.update(logits=[0.9], labels=[1])
+    m.feed(logits=[0.9], labels=[1])
     m.reset()
     assert m.compute() != m.compute()
 
@@ -139,8 +139,8 @@ def test_batch_metric_custom_weight():
             return (float(value), float(weight))
 
     w = W()
-    w.update(value=2.0, weight=3.0)
-    w.update(value=5.0, weight=1.0)
+    w.feed(value=2.0, weight=3.0)
+    w.feed(value=5.0, weight=1.0)
     assert w.compute() == pytest.approx((2.0 * 3.0 + 5.0) / 4.0)
 
 
@@ -157,15 +157,15 @@ def test_batch_metric_multiple_params():
                 return (sum(vals) / len(vals), float(len(vals))) if vals else (0.0, 0.0)
 
         m = MaskedAcc()
-        m.update(logits=[0.9, 0.2, 0.7], labels=[1, 1, 0], mask=[1, 0, 1], step=123)  # 1/2
-        m.update(labels=[0], logits=[0.1], mask=[1])                                  # 1/1
+        m.feed(logits=[0.9, 0.2, 0.7], labels=[1, 1, 0], mask=[1, 0, 1], step=123)  # 1/2
+        m.feed(labels=[0], logits=[0.1], mask=[1])                                  # 1/1
         assert m.compute() == pytest.approx(2 / 3)
 
 
 def test_batch_metric_missing_param():
     m = PairAcc()
     with pytest.raises(KeyError):
-        m.update(logits=[0.9])  # 缺少 labels
+        m.feed(logits=[0.9])  # 缺少 labels
 
 
 def test_batch_metric_merge_across_ranks(monkeypatch):
@@ -175,7 +175,7 @@ def test_batch_metric_merge_across_ranks(monkeypatch):
 
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     m = PairAcc()
-    m.update(logits=[0.9], labels=[1])
+    m.feed(logits=[0.9], labels=[1])
     assert m.compute() == pytest.approx(2 / 3)
 
 
@@ -197,10 +197,24 @@ def test_group_feed_partial_scalars():
     assert out["lr"] == pytest.approx(1e-3)
 
 
+def test_group_local_no_gather(monkeypatch):
+    """local() 只合并本 rank 状态（零通信），供进度条实时显示。"""
+
+    def boom(states):
+        raise AssertionError("local() 不应触发跨 rank 收集")
+
+    monkeypatch.setattr("melog.metrics.group.gather_object", boom)
+    group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
+    group.feed(loss=(2.0, 2.0), logits=[0.9, 0.2], labels=[1, 0])
+    out = group.local()
+    assert out["loss"] == pytest.approx(2.0)
+    assert out["acc"] == pytest.approx(1.0)
+
+
 def test_batch_metric_with_melog(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"acc": PairAcc()})
-    for _ in lg.progress(range(2)):
+    for _ in lg.stepsbar(range(2)):
         group.feed(logits=[0.9, 0.2], labels=[1, 0])
         lg.log_group(group, reset=True)
     lg.close()
@@ -223,7 +237,7 @@ def test_group_merge_across_ranks(monkeypatch):
     monkeypatch.setattr("melog.metrics.group.gather_object", fake_gather)
 
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
-    group.update(loss=(2.0, 2.0), acc=0.5)  # rank0: 4/2, rank1: 1/1
+    group.feed(loss=(2.0, 2.0), acc=0.5)  # rank0: 4/2, rank1: 1/1
     out = group.compute()
     # 直接比较：每组指标的合并输入相同 -> 用 MultiRankMean 逻辑验证见下个测试
     assert set(out) == {"loss", "acc"}
@@ -237,8 +251,8 @@ def test_metric_merge_states_multi_rank(monkeypatch):
 
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     m = Mean()
-    m.update(2.0, 2.0)
-    m.update(2.0, 0.0)  # 不改变权重和（weight=0 的观测）
+    m.feed(2.0, 2.0)
+    m.feed(2.0, 0.0)  # 不改变权重和（weight=0 的观测）
     assert m.compute() == pytest.approx(5.0 / 3.0)
 
 
@@ -252,7 +266,7 @@ def test_group_single_gather_for_all_metrics(monkeypatch):
 
     monkeypatch.setattr("melog.metrics.group.gather_object", fake_gather)
     group = MetricGroup({"loss": Mean(), "total": Sum()})
-    group.update(loss=1.0, total=3.0)  # rank0: loss 1/1, total 3
+    group.feed(loss=1.0, total=3.0)  # rank0: loss 1/1, total 3
     out = group.compute()
     assert out["loss"] == pytest.approx(1.0)  # (1+2)/(1+2)
     assert out["total"] == pytest.approx(9.0)  # 3 + 6
@@ -260,10 +274,10 @@ def test_group_single_gather_for_all_metrics(monkeypatch):
 
 
 # ---------------------------------------------------------------- MetricGroup
-def test_group_update_dispatch():
+def test_group_feed_scalars():
     group = MetricGroup({"loss": Mean(), "n": Count()})
-    group.update(loss=(3.0, 3.0), n=1)
-    group.update(loss=1.0, n=1)
+    group.feed(loss=(3.0, 3.0), n=1)
+    group.feed(loss=1.0, n=1)
     out = group.compute()
     assert out["loss"] == pytest.approx((3.0 * 3 + 1.0) / 4)
     assert out["n"] == pytest.approx(2.0)
@@ -272,16 +286,18 @@ def test_group_update_dispatch():
 def test_group_tuple_weight_dispatch():
     """元组 (值, 权重) 按指标精确加权，其余指标等权。"""
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
-    group.update(loss=(2.0, 4), acc=0.5)
+    group.feed(loss=(2.0, 4), acc=0.5)
     out = group.compute()
     assert out["loss"] == pytest.approx(2.0)   # sum=8, weight=4
     assert out["acc"] == pytest.approx(0.5)
 
 
-def test_group_unknown_metric():
+def test_group_feed_ignores_unknown():
+    """feed 只取已注册指标需要的观测，未注册/多余的键自动忽略。"""
     group = MetricGroup({"loss": Mean()})
-    with pytest.raises(KeyError):
-        group.update(acc=0.5)
+    group.feed(acc=0.5, loss=2.0)
+    out = group.compute()
+    assert out == {"loss": pytest.approx(2.0)}
 
 
 def test_group_duplicate_add():
@@ -292,9 +308,9 @@ def test_group_duplicate_add():
 
 def test_group_reset():
     group = MetricGroup({"loss": Mean()})
-    group.update(loss=1.0)
+    group.feed(loss=1.0)
     group.reset()
-    group.update(loss=3.0)
+    group.feed(loss=3.0)
     assert group.compute()["loss"] == pytest.approx(3.0)
 
 
@@ -310,9 +326,9 @@ def test_group_getitem_contains_len():
 def test_log_group_records_and_resets(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
-    bar = lg.progress(range(4))  # 建条但不迭代
+    bar = lg.stepsbar(range(4))  # 建条但不迭代
     for _ in range(2):
-        group.update(loss=1.0, acc=0.5)
+        group.feed(loss=1.0, acc=0.5)
         lg.log_group(group, reset=True)
     assert bar.n == 0  # epoch 级记录默认不推进进度条
     lg.close()
@@ -345,9 +361,9 @@ def _gloo_worker(rank, world_size, init_file, result_dir):
     group = MetricGroup({"loss": Mean(), "total": Sum()})
     # rank0: loss=2(w=2), total=3；rank1: loss=1(w=1), total=6
     if rank == 0:
-        group.update(loss=(2.0, 2.0), total=3.0)
+        group.feed(loss=(2.0, 2.0), total=3.0)
     else:
-        group.update(loss=(1.0, 1.0), total=6.0)
+        group.feed(loss=(1.0, 1.0), total=6.0)
     out = group.compute()
     (result_dir / f"rank{rank}.json").write_text(json.dumps(out), encoding="utf-8")
     dist.barrier()

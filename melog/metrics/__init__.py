@@ -5,7 +5,7 @@
   继承 BatchMetric，框架自动传入 logits 与 labels 并完成累积合并
 - 自定义单批次指标：继承 BatchMetric 只实现 compute_batch() 一个函数，
   累积、合并、reset、分布式同步全部由框架完成
-- 自定义 epoch 级指标：继承 Metric 实现 update / state / merge_states /
+- 自定义 epoch 级指标：继承 Metric 实现 feed / state / merge_states /
   reset，跨 GPU 的状态收集与单进程直通由基类 compute() 完成
 - MetricGroup：具名指标集合，一次同步合并全部；feed() 自动分发
   logits/labels 与标量观测

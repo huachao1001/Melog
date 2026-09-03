@@ -1,6 +1,6 @@
 """指标基类。
 
-- Metric：完整契约（update / state / merge_states / reset），适合 epoch 级
+- Metric：完整契约（feed / state / merge_states / reset），适合 epoch 级
   或需要自定义合并方式的指标，跨 GPU 的状态收集（all_gather_object）与
   单进程直通由 compute() 统一完成。
 - BatchMetric：单批次指标，子类只需实现 compute_batch() 一个函数，
@@ -34,12 +34,12 @@ class Metric(ABC):
 
     生命周期（典型：一个 epoch 一轮）::
 
-        metric.update(...)          # 每个 batch 累积本地观测
+        metric.feed(...)            # 每个 batch 累积本地观测
         value = metric.compute()    # epoch 末：跨 GPU 同步并计算全局结果
         metric.reset()              # 开启下一轮统计
 
     子类契约：
-        - update(*args, **kwargs): 累积一个批次的本地观测
+        - feed(*args, **kwargs): 累积一个批次的本地观测
         - state(): 导出本地累积状态（任意可 pickle 对象，如数值、列表、字典）
         - merge_states(states): 把各 rank 的状态列表（按 rank 顺序）合并为
           最终结果，返回数值或数值字典
@@ -51,7 +51,7 @@ class Metric(ABC):
         return self.merge_states(gather_object(self.state()))
 
     @abstractmethod
-    def update(self, *args: Any, **kwargs: Any) -> None:
+    def feed(self, *args: Any, **kwargs: Any) -> None:
         """累积一个批次的本地观测。"""
 
     @abstractmethod
@@ -70,7 +70,7 @@ class Metric(ABC):
 class BatchMetric(Metric):
     """单批次指标基类：子类只实现 compute_batch()，其余全部交给框架。
 
-    用户只需提供"单 batch 怎么算"。框架在 update() 时按 compute_batch
+    用户只需提供"单 batch 怎么算"。框架在 feed() 时按 compute_batch
     声明的形参名从观测中自动取值回调；形参名与个数完全由用户自定义
     （logits / labels 仅为常见示例）::
 
@@ -78,8 +78,8 @@ class BatchMetric(Metric):
             def compute_batch(self, logits, labels, mask):
                 ...  # 单 batch 计算，需要几个参数就声明几个
 
-        metric.update(logits=..., labels=..., mask=...)  # 具名喂入
-        metric.update(logits, labels, mask)              # 位置喂入亦可
+        metric.feed(logits=..., labels=..., mask=...)  # 具名喂入
+        metric.feed(logits, labels, mask)              # 位置喂入亦可
 
     compute_batch 返回 float：各 batch 等权平均；返回 (value, weight)
     元组：按 weight 加权平均（各 batch 样本数不同时推荐）。多 GPU 下
@@ -143,7 +143,7 @@ class BatchMetric(Metric):
         return kwargs
 
     # ------------------------------------------------------------ 生命周期
-    def update(self, *args: Any, **batch: Any) -> None:
+    def feed(self, *args: Any, **batch: Any) -> None:
         """喂入一个 batch 的观测；框架按形参名取值并调用 compute_batch。"""
         self._consume(self.compute_batch(**self._build_kwargs(args, batch)))
 

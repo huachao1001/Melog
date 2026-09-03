@@ -5,6 +5,7 @@
 from .core import (
     audio,
     current,
+    current_bar,
     error,
     image,
     init,
@@ -36,6 +37,7 @@ __version__ = "0.1.0"
 __all__ = [
     "init",
     "current",
+    "current_bar",
     "tqdm",
     "scalar",
     "log",

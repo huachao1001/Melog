@@ -111,7 +111,7 @@ class _CountMetric(BatchMetric):
 
     计数型指标的全局结果（如 macro F1）无法由各 batch 值加权平均还原，
     因此重写 state / merge_states 以计数状态参与框架的同步合并，并重写
-    _consume 把 compute_batch 的逐样本预测对累积为计数（update 仍由
+    _consume 把 compute_batch 的逐样本预测对累积为计数（feed 仍由
     基类负责：接收观测并按形参名转发给 compute_batch）。
     """
 

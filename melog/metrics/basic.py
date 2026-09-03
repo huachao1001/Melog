@@ -1,7 +1,7 @@
 """内置标量指标：平均 / 求和 / 最近值 / 计数。
 
 标量累积型指标的状态是一组命名数值，跨 GPU 合并方式由 _ops 声明，
-子类只需实现 update()，无需接触任何分布式代码。
+子类只需实现 feed()，无需接触任何分布式代码。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ class ScalarMetric(Metric):
         - _ops: 状态名 -> 跨 rank 合并方式（"sum" / "max" / "min" / "first"）
         - _init: 各状态初始值（缺省 0.0，max/min 用 ±inf）
 
-    并实现 update()；合并结果可经 _finalize() 加工（如 sum/weight）。
+    并实现 feed()；合并结果可经 _finalize() 加工（如 sum/weight）。
     """
 
     _ops: Dict[str, str] = {}
@@ -61,7 +61,7 @@ class ScalarMetric(Metric):
 
 
 class Mean(ScalarMetric):
-    """加权平均。update(value, weight=1.0)。
+    """加权平均。feed(value, weight=1.0)。
 
     常规训练无需传 weight（各 batch 等权平均）；各 batch 样本数不均、
     需要按样本/token 精确加权时才传 weight（经 MetricGroup 喂入时
@@ -73,7 +73,7 @@ class Mean(ScalarMetric):
 
     _ops = {"sum": "sum", "weight": "sum"}
 
-    def update(self, value: Any, weight: Any = 1.0) -> None:
+    def feed(self, value: Any, weight: Any = 1.0) -> None:
         self._acc["sum"] += _to_float(value) * _to_float(weight)
         self._acc["weight"] += _to_float(weight)
 
@@ -83,11 +83,11 @@ class Mean(ScalarMetric):
 
 
 class Sum(ScalarMetric):
-    """累加求和。update(value)。"""
+    """累加求和。feed(value)。"""
 
     _ops = {"total": "sum"}
 
-    def update(self, value: Any) -> None:
+    def feed(self, value: Any) -> None:
         self._acc["total"] += _to_float(value)
 
     def _finalize(self, merged: Dict[str, float]) -> float:
@@ -99,7 +99,7 @@ class Last(ScalarMetric):
 
     _ops = {"v": "first"}
 
-    def update(self, value: Any) -> None:
+    def feed(self, value: Any) -> None:
         self._acc["v"] = _to_float(value)
 
     def _finalize(self, merged: Dict[str, float]) -> float:
@@ -111,7 +111,7 @@ class Count(ScalarMetric):
 
     _ops = {"n": "sum"}
 
-    def update(self, n: Any = 1.0) -> None:
+    def feed(self, n: Any = 1.0) -> None:
         self._acc["n"] += _to_float(n)
 
     def _finalize(self, merged: Dict[str, float]) -> float:

@@ -216,7 +216,7 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        items = list(logger.progress(range(3), description="train"))
+        items = list(logger.progress(range(3), epoch=0))
         assert items == [0, 1, 2]
     finally:
         logger.close()
@@ -225,6 +225,7 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
     log_path = next((tmp_path / "t").glob("**/console.log"))
     text = read(log_path)
     assert "3/3" in text               # 迭代自动推进到终点
+    assert "epoch 0" in text           # epoch 传入时行首自动标注
 
 
 def test_melog_progress_shows_log_postfix(tmp_path):
@@ -232,7 +233,7 @@ def test_melog_progress_shows_log_postfix(tmp_path):
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        for _ in logger.progress(range(2), description="train"):
+        for _ in logger.progress(range(2)):
             logger.scalar({"loss": 0.5})
     finally:
         logger.close()
@@ -244,8 +245,8 @@ def test_melog_progress_reusable_across_epochs(tmp_path):
     """进度条自然结束后自动解除登记，同一 Melog 可再次 progress()。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        first = list(logger.progress(range(2), description="epoch0"))
-        second = list(logger.progress(range(2), description="epoch1"))
+        first = list(logger.progress(range(2), epoch=0))
+        second = list(logger.progress(range(2), epoch=1))
         assert first == [0, 1] and second == [0, 1]
     finally:
         logger.close()
@@ -255,7 +256,7 @@ def test_melog_progress_nesting_rejected(tmp_path):
     """progress() 进行中不允许再开新进度条；close 后解除登记可再建。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        bar = logger.progress(range(3), description="train")
+        bar = logger.progress(range(3))
         with pytest.raises(RuntimeError):
             logger.progress(range(3))
         bar.close()
@@ -293,7 +294,7 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
         assert sys.stdout is not saved_stdout  # 已接管
-        for _ in logger.progress(range(2), description="train"):
+        for _ in logger.progress(range(2)):
             logger.scalar({"loss": 0.5})
             print("step done")
     finally:
@@ -311,7 +312,7 @@ def test_melog_console_log_progress_line_uses_cr(tmp_path):
     """日志文件里的进度条行以 \\r 结尾（不可见空白字符标记），定稿后变 \\n。"""
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
-        for _ in logger.progress(range(1), description="train"):
+        for _ in logger.progress(range(1)):
             # 迭代中途：最后一行应为 \r 结尾的进度条行
             path = next((tmp_path / "t").glob("**/console.log"))
             assert path.read_bytes().endswith(b"\r")

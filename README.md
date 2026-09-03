@@ -70,7 +70,7 @@ Web 曲线会在每个 epoch 起点画分界虚线（标注 `e0` / `e1` / …）
 
 ```python
 for epoch in range(epochs):
-    for _ in logger.progress(loader, epoch=epoch, description=f"epoch {epoch}"):
+    for _ in logger.progress(loader, epoch=epoch):   # 行首自动标注 "epoch N"
         loss = train_one_step()
         logger.scalar({"loss": loss, "lr": lr})   # epoch 已由 progress 绑定，无需再传
 ```

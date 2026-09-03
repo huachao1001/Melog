@@ -156,7 +156,6 @@ class Melog:
     def progress(
         self,
         iterable: Iterable,
-        description: str = "",
         total: Optional[float] = None,
         epoch: Optional[int] = None,
         **kwargs: Any,
@@ -170,18 +169,17 @@ class Melog:
 
         传入 epoch 时，进入进度条即绑定该 epoch（epoch 内步数清零、全局
         x 从上一位置接续），bar 内的 scalar() / log_group() 无需再传
-        epoch，bar 结束后沿用，直至下一个 epoch::
+        epoch，bar 结束后沿用，直至下一个 epoch；行首描述自动标为
+        "epoch N"（需自定义时透传 tqdm 的 desc=...）::
 
             for epoch in range(epochs):
                 for _ in logger.progress(loader, epoch=epoch):
                     logger.scalar({"loss": loss})
 
-        进度条布局：[n/total] 最前，指标其后，条形图/百分比/耗时殿后；
-        description 提供时显示在行首（默认不显示）。total 缺省时自动取
-        len(iterable)。进度条实时渲染到控制台，并经 Mirror 同步进
-        console.log；非 rank0 或设置 MELOG_DISABLE_PROGRESS=1 时静默。
-        迭代自然结束后自动解除登记，可再次调用 progress()（如每个
-        epoch 一条进度条）。
+        total 缺省时自动取 len(iterable)。进度条实时渲染到控制台，并经
+        Mirror 同步进 console.log；非 rank0 或设置 MELOG_DISABLE_PROGRESS=1
+        时静默。迭代自然结束后自动解除登记，可再次调用 progress()（如
+        每个 epoch 一条进度条）。
         """
         if self._progress is not None:
             raise RuntimeError("progress() 上下文不可嵌套")
@@ -192,7 +190,9 @@ class Melog:
                 self._epoch_base = self._step
                 self._epoch_bases[epoch] = self._epoch_base
         disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
-        bar = tqdm(iterable=iterable, total=total, desc=description, disable=disable, **kwargs)
+        if epoch is not None and "desc" not in kwargs:
+            kwargs["desc"] = f"epoch {epoch}"
+        bar = tqdm(iterable=iterable, total=total, disable=disable, **kwargs)
         return self._register_progress(bar)
 
     def _register_progress(self, bar: tqdm) -> tqdm:

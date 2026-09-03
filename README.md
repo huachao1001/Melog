@@ -54,6 +54,27 @@ for epoch in range(epochs):
 - `step` 为**当前 epoch 内**的步数，缺省内部自增（每个 epoch 从 0 重新计步）；
   未启用 epoch 时 `step` 含义不变（全局步数，缺省自增）
 
+## 记录图像与音频
+
+除指标曲线外，Web 端 header 可在 **曲线 / 图像 / 音频** 三个页签间切换。图像与音频用
+`log_image` / `log_audio` 记录，Web 端按名字建卡片、滑杆按 step 回放（图像点击看原图，
+音频在线播放）；文件自动落盘到 `run_dir/media/`，元数据随日志持久化，历史日志加载时
+媒体一并恢复：
+
+```python
+logger.log({"loss": loss}, epoch=epoch, step=step)
+logger.log_image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
+logger.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
+```
+
+- `step` / `epoch` 缺省时自动附着到**最近一次 `log()` 的位置**，不推进 step 计数
+- `caption="..."` 可为每条图像 / 音频配一段文字（如样本说明、转写文本），
+  显示在卡片上、随滑杆切换；换行会被保留
+- 图像：`(H,W)` 灰度或 `(H,W,C)`（C=1/3/4），浮点自动映射 0-255，统一存为 PNG
+- 音频：`(N,)` 单声道或 `(N, 声道数)`，浮点按 [-1,1] 裁剪存为 16bit WAV；
+  传文件路径则按原格式复制
+- 数组编码需要 `pillow`（仅图像）：`pip install pillow`
+
 ## 指标计算（多 GPU 自动同步）
 
 内置 `Mean` / `Sum` / `Max` / `Min` / `Last` / `Count`，按 epoch 组织在 `MetricGroup` 中使用：
@@ -196,6 +217,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 ### 主要方法
 
 - `log(metrics, step=None, epoch=None, advance=1)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
+- `log_image(name, data, step=None, epoch=None)` / `log_audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
 - `train(total)` — 返回进度条上下文管理器（`bar.advance(n)` 推进）
 - `finish()` — 落盘并停止 Web 服务
 
@@ -216,9 +238,10 @@ melog F:/runs/exp1 --port 9000 --no-browser  # 自定义端口 / 不开浏览器
 
 ```text
 melog/
-├── core.py          # Melog 主类：记录、调度、JSONL 落盘
+├── core.py          # Melog 主类：记录、调度、JSONL 落盘、媒体记录
 ├── cli.py           # 命令行入口：melog <path>
 ├── distributed.py   # 多 GPU all_reduce / all_gather 原语
+├── media.py         # 图像/音频落盘（路径复制或数组编码）
 ├── metrics/         # 指标计算与跨 GPU 同步
 │   ├── base.py      # Metric / BatchMetric 基类（自定义指标继承其一）
 │   ├── basic.py     # Mean / Sum / Max / Min / Last / Count
@@ -228,11 +251,13 @@ melog/
 ├── progress.py      # rich 进度条 + 指标列
 └── web/
     ├── server.py    # WebServer：uvicorn 线程生命周期
-    ├── app.py       # ApiRoutes：路由注册
+    ├── app.py       # ApiRoutes：路由注册（指标/媒体/文件浏览/加载/WS）
     ├── store.py     # MetricStore：内存指标历史
     ├── view.py      # MetricView：实时/历史视图切换
+    ├── media_store.py  # MediaStore：实时媒体索引
+    ├── media_view.py   # MediaView：媒体视图切换 + 文件白名单解析
     ├── fs.py        # FileBrowser：文件浏览
-    ├── loader.py    # LogLoader：JSONL 解析
+    ├── loader.py    # LogLoader / MediaLoader：JSONL 解析
     ├── ws.py        # WsHub：WebSocket 广播
     └── static/      # 前端（js 按类分模块）
 ```

@@ -7,9 +7,9 @@ export class LiveSocket {
 
   connect() {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-    ws.onopen = () => { this.statusEl.className = 'dot ok'; this.statusEl.title = '已连接'; };
+    ws.onopen = () => { this.statusEl.className = 'conn ok'; this.statusEl.textContent = '已连接'; this.statusEl.title = '已连接'; };
     ws.onclose = () => {
-      this.statusEl.className = 'dot'; this.statusEl.title = '未连接';
+      this.statusEl.className = 'conn off'; this.statusEl.textContent = '未连接'; this.statusEl.title = '未连接';
       setTimeout(() => this.connect(), 3000);
     };
     ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));

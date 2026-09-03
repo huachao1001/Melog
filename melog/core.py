@@ -17,9 +17,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from .distributed import get_rank, reduce_metrics
+from .media import sanitize_name, save_audio, save_image
 from .metrics import MetricGroup
 from .progress import TrainProgress
-from .web.server import MetricStore, WebServer
+from .web.media_store import MediaStore
+from .web.server import WebServer
+from .web.store import MetricStore
 
 __all__ = ["Melog"]
 
@@ -70,6 +73,8 @@ class Melog:
         self._epoch: Optional[int] = None  # 当前 epoch（用户传入后粘滞生效）
         self._epoch_step = 0  # 当前 epoch 内步数（未显式传入时内部统计）
         self._epoch_base = 0  # 当前 epoch 起始处的全局 x（跨 epoch 连续）
+        self._last_x = 0  # 最近一次记录的全局 x（媒体默认附着于此）
+        self._last_epoch: Optional[int] = None  # 最近一次记录的 epoch
         self._pending = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -79,10 +84,12 @@ class Melog:
         self._log_file = self._run_dir / "metrics.melog"
 
         self.store = MetricStore()
+        self.media = MediaStore()
         self._web: Optional[WebServer] = None
         if enable_web and self._is_primary:
             self._web = WebServer(
                 self.store,
+                media_store=self.media,
                 host=web_host,
                 port=web_port,
                 max_points=max_plot_points,
@@ -163,6 +170,7 @@ class Melog:
             self._push_web(x, merged, out_epoch)
             self._update_progress(merged)
             self._maybe_flush()
+            self._last_x, self._last_epoch = x, out_epoch
             if commit:
                 self._epoch_step = (step + 1) if step is not None else (self._epoch_step + 1)
                 self._step = x + 1
@@ -170,6 +178,91 @@ class Melog:
 
     # 兼容 wandb 风格别名
     log_metrics = log
+
+    # ------------------------------------------------------------------ 记录媒体
+    def log_image(
+        self,
+        name: str,
+        data: Any,
+        step: Optional[int] = None,
+        epoch: Optional[int] = None,
+        caption: Optional[str] = None,
+    ) -> None:
+        """记录一帧图像（曲线图之外的"图像"页签展示）。
+
+        数据落盘到 run_dir/media/image/<name>/，元数据写入日志文件并
+        实时推送到 Web；多 GPU 下仅 rank0 落盘，其余 rank 直接返回。
+
+        Args:
+            name: 图像名，支持 "train/sample" 层级命名（页面按名建卡片）。
+            data: 文件路径 / PIL.Image / numpy / torch 张量
+                （(H,W) 灰度或 (H,W,C)，C=1/3/4；浮点自动映射 0-255）。
+            step / epoch: 缺省附着到最近一次 log() 的位置，不推进 step 计数。
+            caption: 配文，随图显示在卡片上（如样本说明、预测对比）。
+        """
+        self._log_media("image", name, data, step=step, epoch=epoch, caption=caption,
+                        save=lambda out_dir, stem: save_image(data, out_dir, stem))
+
+    def log_audio(
+        self,
+        name: str,
+        data: Any,
+        sr: int = 22050,
+        step: Optional[int] = None,
+        epoch: Optional[int] = None,
+        caption: Optional[str] = None,
+    ) -> None:
+        """记录一段音频（"音频"页签展示，浏览器内直接播放）。
+
+        Args:
+            name: 音频名，支持层级命名。
+            data: 文件路径（wav/mp3/flac 等按原格式复制）/ numpy / torch
+                波形（(N,) 单声道或 (N, 声道数)；浮点按 [-1,1] 裁剪）。
+            sr: 采样率（data 为路径时忽略，沿用文件本身格式）。
+            step / epoch: 缺省附着到最近一次 log() 的位置，不推进 step 计数。
+            caption: 配文，随音频显示在卡片上（如转写文本、听感说明）。
+        """
+        self._log_media("audio", name, data, step=step, epoch=epoch, sr=sr, caption=caption,
+                        save=lambda out_dir, stem: save_audio(data, out_dir, stem, sr))
+
+    def _log_media(self, kind: str, name: str, data: Any, save, step, epoch,
+                   sr=None, caption=None) -> None:
+        """媒体记录公共流程：定位 -> 落盘 -> 索引 -> 日志 -> 推送。"""
+        if not self._is_primary:
+            return
+        safe = sanitize_name(name)
+        with self._lock:
+            x, e = self._media_position(step, epoch)
+            rel = f"media/{kind}/{safe}/{save(self._run_dir / 'media' / kind / safe, f'{int(x):09d}')}"
+            record: Dict[str, Any] = {"type": kind, "metric": name, "step": int(x), "file": rel}
+            if e is not None:
+                record["epoch"] = e
+            if sr is not None:
+                record["sr"] = sr
+            if caption:
+                record["caption"] = caption
+            self.media.add(kind, name, x, rel, e, sr=sr, caption=caption)
+            self._append_journal(record)
+            self._push_web_media(kind, name, x, e, rel, sr=sr, caption=caption)
+
+    def _media_position(self, step: Optional[int], epoch: Optional[int]):
+        """媒体条目的展示位置：缺省附着最近一次 log()，不推进任何计数器。"""
+        if step is None and epoch is None:
+            return self._last_x, self._last_epoch
+        e = epoch if epoch is not None else self._last_epoch
+        x = step if step is not None else self._last_x
+        return x, e
+
+    def _append_journal(self, record: Dict[str, Any]) -> None:
+        """把一条记录追加到日志文件（调用方需持有 _lock）。"""
+        with open(self._log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def _push_web_media(self, kind: str, name: str, step: int, epoch: Optional[int],
+                        relpath: str, sr: Optional[int] = None,
+                        caption: Optional[str] = None) -> None:
+        if self._web is not None:
+            self._web.publish_media(kind, name, step, epoch, relpath, sr=sr, caption=caption)
 
     def log_group(
         self,

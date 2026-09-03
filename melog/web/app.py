@@ -1,17 +1,18 @@
-"""API 路由：静态页面 + 指标/文件浏览/加载接口 + WebSocket。"""
+"""API 路由：静态页面 + 指标/媒体/文件浏览/加载接口 + WebSocket。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 if TYPE_CHECKING:
     from .fs import FileBrowser
-    from .loader import LogLoader
+    from .loader import LogLoader, MediaLoader
+    from .media_view import MediaView
     from .view import MetricView
     from .ws import WsHub
 
@@ -21,11 +22,22 @@ STATIC_DIR = Path(__file__).parent / "static"
 class ApiRoutes:
     """把各功能组件封装成 FastAPI 路由。"""
 
-    def __init__(self, view: "MetricView", hub: "WsHub", browser: "FileBrowser", loader: "LogLoader", default_dir: str = ""):
+    def __init__(
+        self,
+        view: "MetricView",
+        hub: "WsHub",
+        browser: "FileBrowser",
+        loader: "LogLoader",
+        media_loader: Optional["MediaLoader"] = None,
+        media_view: Optional["MediaView"] = None,
+        default_dir: str = "",
+    ):
         self.view = view
         self.hub = hub
         self.browser = browser
         self.loader = loader
+        self.media_loader = media_loader
+        self.media_view = media_view
         self.initial_default = default_dir  # 初始展示日志所在目录
         self.default_dir = default_dir      # 文件浏览器默认打开目录（随当前展示日志联动）
 
@@ -33,6 +45,8 @@ class ApiRoutes:
     def register(self, app: FastAPI) -> None:
         app.get("/", response_class=HTMLResponse)(self.index)
         app.get("/api/metrics")(self.api_metrics)
+        app.get("/api/media")(self.api_media)
+        app.get("/api/media/file")(self.api_media_file)
         app.get("/api/fs")(self.api_fs)
         app.post("/api/load")(self.api_load)
         app.post("/api/unload")(self.api_unload)
@@ -45,6 +59,19 @@ class ApiRoutes:
     # ------------------------------------------------------------------ 指标
     async def api_metrics(self):
         return {"project": "run", "metrics": self.view.snapshot()}
+
+    # ------------------------------------------------------------------ 媒体
+    async def api_media(self):
+        return {"media": self.media_view.snapshot() if self.media_view else {}}
+
+    async def api_media_file(self, path: str = ""):
+        """回源媒体文件：仅允许当前视图媒体目录内的白名单路径。"""
+        if self.media_view is None:
+            return JSONResponse(status_code=404, content={"error": "媒体服务不可用"})
+        file = self.media_view.resolve(path)
+        if file is None:
+            return JSONResponse(status_code=404, content={"error": f"媒体不存在: {path}"})
+        return FileResponse(file)
 
     # ------------------------------------------------------------------ 文件浏览
     async def api_fs(self, path: str = ""):
@@ -71,19 +98,40 @@ class ApiRoutes:
         if not series:
             return JSONResponse(status_code=400, content={"error": "文件中没有可解析的指标"})
         colors = self._read_colors(log_file)  # 该日志运行时的用户指定颜色（如有）
+        media = self._read_media(log_file)
         self.view.set_loaded(series, colors)
+        if self.media_view is not None:
+            self.media_view.set_loaded(media, log_file.parent)
         self.default_dir = str(log_file.parent)  # 默认浏览目录跟随当前展示日志
         await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
         await self.hub.broadcast({"type": "colors", "colors": colors})
+        await self._broadcast_media_history()
         return {"ok": True, "count": len(series), "path": str(log_file)}
 
     async def api_unload(self):
         """切回当前实时运行视图。"""
         self.view.clear_loaded()
+        if self.media_view is not None:
+            self.media_view.clear_loaded()
         self.default_dir = self.initial_default
         await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
         await self.hub.broadcast({"type": "colors", "colors": self.view.colors})
+        await self._broadcast_media_history()
         return {"ok": True}
+
+    def _read_media(self, log_file: Path) -> dict:
+        """解析日志中的媒体记录；无 MediaLoader 或解析失败时返回空。"""
+        if self.media_loader is None:
+            return {}
+        try:
+            return self.media_loader.parse(log_file)
+        except OSError:
+            return {}
+
+    async def _broadcast_media_history(self):
+        if self.media_view is None:
+            return
+        await self.hub.broadcast({"type": "media_history", "media": self.media_view.snapshot()})
 
     @staticmethod
     def _read_colors(log_file: Path) -> dict:
@@ -100,9 +148,11 @@ class ApiRoutes:
         await websocket.accept()
         self.hub.attach(websocket)
         try:
-            # 建连即补发全量历史（降采样后），避免前端漏数据；随后下发用户指定颜色
+            # 建连即补发全量历史（降采样后），避免前端漏数据；随后下发颜色与媒体索引
             await websocket.send_json({"type": "history", "metrics": self.view.snapshot()})
             await websocket.send_json({"type": "colors", "colors": self.view.colors})
+            if self.media_view is not None:
+                await websocket.send_json({"type": "media_history", "media": self.media_view.snapshot()})
             while True:
                 await websocket.receive_text()  # 保持连接，忽略客户端消息
         except WebSocketDisconnect:

@@ -81,6 +81,7 @@ def test_publish_carries_epoch(app_client):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()  # history
         ws.receive_json()  # colors
+        ws.receive_json()  # media_history
         time.sleep(0.1)
         import asyncio
 
@@ -97,10 +98,12 @@ def test_websocket_history(app_client):
         msg = ws.receive_json()
         assert msg["type"] == "history"
         assert msg["metrics"]["loss"] == [{"step": 3, "value": 0.5}]
+        assert ws.receive_json()["type"] == "colors"
+        assert ws.receive_json()["type"] == "media_history"
 
 
 def test_websocket_sends_colors(app_client):
-    """建连先发 history 再发 colors（可为空 dict）。"""
+    """建连先发 history 再发 colors（可为空 dict），随后 media_history。"""
     client, server = app_client
     server.set_colors({"loss": "#ef4444"})
     with client.websocket_connect("/ws") as ws:
@@ -108,6 +111,7 @@ def test_websocket_sends_colors(app_client):
         msg = ws.receive_json()
         assert msg["type"] == "colors"
         assert msg["colors"]["loss"] == "#ef4444"
+        assert ws.receive_json()["type"] == "media_history"
 
 
 def test_set_colors_updates_view(app_client):
@@ -144,6 +148,7 @@ def test_publish_to_websocket(app_client):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()  # history
         ws.receive_json()  # colors
+        ws.receive_json()  # media_history
         # 模拟后台线程推送
         time.sleep(0.1)
         import asyncio
@@ -153,6 +158,108 @@ def test_publish_to_websocket(app_client):
         msg = ws.receive_json()
         assert msg["type"] == "update"
         assert msg["metrics"]["loss"] == 0.9
+
+
+# ---------------------------------------------------------------- 媒体接口
+def test_ws_sends_media_history(app_client):
+    client, server = app_client
+    server.media_store.add("image", "pred", 0, "media/image/pred/000000000.png", epoch=1)
+    with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["type"] == "history"
+        assert ws.receive_json()["type"] == "colors"
+        msg = ws.receive_json()
+        assert msg["type"] == "media_history"
+        entry = msg["media"]["image"]["pred"][0]
+        assert entry["step"] == 0 and entry["epoch"] == 1
+        assert entry["url"].startswith("/api/media/file?path=")
+
+
+def test_api_media_snapshot(app_client):
+    client, server = app_client
+    assert client.get("/api/media").json() == {"media": {"image": {}, "audio": {}}}
+    server.media_store.add("audio", "tone", 2, "media/audio/tone/000000002.wav", epoch=0)
+    media = client.get("/api/media").json()["media"]
+    assert media["audio"]["tone"][0]["step"] == 2
+    assert media["audio"]["tone"][0]["url"].startswith("/api/media/file?path=")
+
+
+def test_publish_media_payload(app_client):
+    client, server = app_client
+    sent = []
+    server.hub.publish = sent.append
+    server.publish_media("image", "pred", 3, 1, "media/image/pred/000000003.png",
+                         caption="epoch 1 的样本")
+    server.publish_media("audio", "tone", 4, None, "media/audio/tone/000000004.wav", sr=8000)
+    assert sent[0] == {
+        "type": "image", "name": "pred", "step": 3, "epoch": 1,
+        "caption": "epoch 1 的样本",
+        "url": "/api/media/file?path=media/image/pred/000000003.png",
+    }
+    assert sent[1]["type"] == "audio" and sent[1]["sr"] == 8000
+    assert "epoch" not in sent[1] and "caption" not in sent[1]
+
+
+def test_api_media_file_whitelist(tmp_path):
+    pytest.importorskip("PIL")
+    run = tmp_path / "run"
+    run.mkdir()
+    img_dir = run / "media/image/pred"
+    img_dir.mkdir(parents=True)
+    from PIL import Image
+
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(img_dir / "000000000.png")
+
+    server = WebServer(store=MetricStore(), port=8989, log_file=str(run / "metrics.melog"))
+    client = TestClient(server.app)
+
+    resp = client.get("/api/media/file", params={"path": "media/image/pred/000000000.png"})
+    assert resp.status_code == 200 and resp.headers["content-type"].startswith("image/")
+
+    # 穿越与未知路径一律 404
+    assert client.get("/api/media/file", params={"path": "../../etc/passwd"}).status_code == 404
+    assert client.get("/api/media/file", params={"path": "media/nope.png"}).status_code == 404
+    assert client.get("/api/media/file", params={"path": ""}).status_code == 404
+
+
+def test_load_broadcasts_media_history(tmp_path):
+    """加载历史日志后，WS 收到的 media_history 指向该日志的媒体。"""
+    pytest.importorskip("PIL")
+    import asyncio
+
+    run = tmp_path / "old_run"
+    (run / "media/image/hist").mkdir(parents=True)
+    from PIL import Image
+
+    Image.new("L", (4, 4)).save(run / "media/image/hist/000000003.png")
+    log = run / "metrics.melog"
+    log.write_text(
+        '{"metric": "loss", "step": 0, "value": 1.0}\n'
+        '{"type": "image", "metric": "hist", "step": 3, "file": "media/image/hist/000000003.png"}\n',
+        encoding="utf-8",
+    )
+    server = WebServer(store=MetricStore(), port=8988, log_file=str(tmp_path / "live" / "metrics.melog"))
+    client = TestClient(server.app)
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json(); ws.receive_json(); ws.receive_json()  # history/colors/media_history
+        assert client.post("/api/load", json={"path": str(log)}).json()["ok"] is True
+        time.sleep(0.1)
+        msgs = [ws.receive_json() for _ in range(3)]
+        media_msg = next(m for m in msgs if m["type"] == "media_history")
+        entry = media_msg["media"]["image"]["hist"][0]
+        assert entry["step"] == 3
+
+        # 回源到历史日志的媒体文件
+        from urllib.parse import unquote, urlparse, parse_qs
+
+        rel = parse_qs(urlparse(entry["url"]).query)["path"][0]
+        file_resp = client.get("/api/media/file", params={"path": rel})
+        assert file_resp.status_code == 200
+
+        client.post("/api/unload")
+        time.sleep(0.1)
+        msgs = [ws.receive_json() for _ in range(3)]
+        media_msg = next(m for m in msgs if m["type"] == "media_history")
+        assert media_msg["media"]["image"] == {}  # 实时视图无媒体
 
 
 # ---------------------------------------------------------------- 文件浏览

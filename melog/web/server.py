@@ -13,7 +13,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .app import STATIC_DIR, ApiRoutes
 from .fs import FileBrowser
-from .loader import LogLoader
+from .loader import LogLoader, MediaLoader
+from .media_store import MediaStore
+from .media_view import MediaView
 from .store import MetricStore
 from .view import MetricView
 from .ws import WsHub
@@ -27,15 +29,18 @@ class WebServer:
     组件划分：
     - MetricStore: 实时指标历史（与 core 共享）
     - MetricView:  展示视图（实时/历史切换）
+    - MediaStore:  实时媒体索引（与 core 共享）
+    - MediaView:   媒体展示视图（实时/历史切换 + 文件白名单解析）
     - WsHub:       WebSocket 客户端与广播
     - FileBrowser: 文件系统浏览
-    - LogLoader:   JSONL 解析
+    - LogLoader / MediaLoader: JSONL 解析（指标 / 媒体）
     - ApiRoutes:   路由注册
     """
 
     def __init__(
         self,
         store: MetricStore,
+        media_store: Optional[object] = None,
         host: str = "127.0.0.1",
         port: int = 8666,
         max_points: int = 2000,
@@ -45,10 +50,17 @@ class WebServer:
         self.host = host
         self.port = port
         self.view = MetricView(store, max_points)
+        self.media_store = media_store if isinstance(media_store, MediaStore) else MediaStore()
+        self.media_view = MediaView(self.media_store)
+        # 媒体相对路径以 run_dir 为根（media/<kind>/<name>/…）；历史加载时随日志切换
+        self.media_view.set_base(Path(log_file).parent if log_file else None)
         self.hub = WsHub()
         # 文件浏览器默认打开当前展示日志所在目录；无日志时退回进程 cwd
         default_dir = str(Path(log_file).parent) if log_file else str(Path.cwd())
-        self.routes = ApiRoutes(self.view, self.hub, FileBrowser, LogLoader, default_dir=default_dir)
+        self.routes = ApiRoutes(
+            self.view, self.hub, FileBrowser, LogLoader, MediaLoader,
+            media_view=self.media_view, default_dir=default_dir,
+        )
         self._thread: Optional[threading.Thread] = None
         self._server: Optional[object] = None
         self._started = threading.Event()
@@ -59,11 +71,12 @@ class WebServer:
         app = FastAPI(title="Melog", docs_url=None, redoc_url=None)
         self.routes.register(app)
 
-        # 静态资源禁用强缓存：JS/CSS 更新后浏览器立即生效（仍走 ETag 304 协商缓存）
+        # 静态资源与首页禁用强缓存：JS/CSS/HTML 更新后浏览器立即生效（仍走 ETag 304 协商缓存）
         @app.middleware("http")
         async def no_cache_static(request: Request, call_next):
             response = await call_next(request)
-            if request.url.path.startswith("/static"):
+            path = request.url.path
+            if path.startswith("/static") or path == "/":
                 response.headers["Cache-Control"] = "no-cache"
             return response
 
@@ -82,6 +95,25 @@ class WebServer:
         """线程安全：更新用户指定颜色（指标名 -> CSS 颜色）并广播。"""
         self.view.set_colors(colors)
         self.hub.publish({"type": "colors", "colors": dict(colors)})
+
+    def publish_media(self, kind: str, name: str, step: int, epoch: Optional[int],
+                      relpath: str, sr: Optional[int] = None,
+                      caption: Optional[str] = None) -> None:
+        """线程安全：从训练主线程向所有 WebSocket 客户端广播新媒体条目。"""
+        payload: Dict[str, object] = {"type": kind, "name": name, "step": step,
+                                      "url": self.media_url(relpath)}
+        if epoch is not None:
+            payload["epoch"] = epoch
+        if sr is not None:
+            payload["sr"] = sr
+        if caption:
+            payload["caption"] = caption
+        self.hub.publish(payload)
+
+    def media_url(self, relpath: str) -> str:
+        from ..media import media_url
+
+        return media_url(relpath)
 
     # ------------------------------------------------------------------ 生命周期
     def start(self) -> None:

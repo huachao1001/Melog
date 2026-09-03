@@ -4,13 +4,20 @@
 <meta charset="utf-8">
 <title>Melog 指标监控</title>
 <script src="/static/echarts.min.js?v=2"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=3">
+<link rel="stylesheet" href="/static/css/style.css?v=4">
 <link rel="icon" href="/static/logo.svg">
 </head>
 <body>
 <header>
-  <img src="/static/logo.svg" alt="Melog">
-  <span id="status" class="dot" title="未连接"></span>
+  <div class="logo-wrap">
+    <img src="/static/logo.svg" alt="Melog">
+    <span id="status" class="conn off" title="未连接">未连接</span>
+  </div>
+  <nav id="views" class="views" aria-label="视图切换">
+    <button class="view-tab active" data-view="charts">曲线</button>
+    <button class="view-tab" data-view="images">图像<span class="badge hidden"></span></button>
+    <button class="view-tab" data-view="audios">音频<span class="badge hidden"></span></button>
+  </nav>
   <button id="logBtn" class="icon-btn" title="打开日志" aria-label="打开日志">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -27,6 +34,8 @@
   </button>
 </header>
 <div id="charts"><div id="empty">等待训练指标…</div></div>
+<div id="images" class="media-grid hidden"></div>
+<div id="audios" class="media-grid hidden"></div>
 
 <!-- 文件浏览器弹窗 -->
 <div id="fbModal" class="hidden">
@@ -58,6 +67,6 @@
   </div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=9"></script>
+<script type="module" src="/static/js/main.js?v=10"></script>
 </body>
 </html>

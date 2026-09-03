@@ -2,8 +2,6 @@
   <img src="assets/logo.svg" alt="Melog" width="340">
 </div>
 
-# Melog
-
 轻量级训练监控库：**多 GPU 指标合并 + 控制台实时进度条 + Web 可视化**。
 
 ```text

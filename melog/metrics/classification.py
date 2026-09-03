@@ -1,7 +1,10 @@
-"""内置分类指标：Accuracy / Precision / Recall / F1 / ConfusionMatrix。
+"""内置分类指标：Accuracy / Precision / Recall / F1 / ConfusionMatrix / AUC。
 
-均继承 BatchMetric：框架把每个 batch 的 logits 与 labels 回调给
+Accuracy 继承 BatchMetric：框架把每个 batch 的 logits 与 labels 回调给
 compute_batch，累积、跨 GPU 合并、reset 由框架完成。
+Precision / Recall / F1 / ConfusionMatrix / AUC 继承 Metric：update 返回
+本批次增量（预测对计数 / 得分对），compute 由合并后的总量算全局结果，
+同样无需感知多卡。
 logits -> 预测类别的转换由预测函数完成（默认 preds_from_logits，
 可通过 predictor 参数替换为自定义函数）。
 
@@ -15,7 +18,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .base import BatchMetric
+from .base import BatchMetric, Metric
 
 __all__ = [
     "preds_from_logits",
@@ -106,13 +109,12 @@ class Accuracy(BatchMetric):
         return (hits / len(targets), float(len(targets))) if targets else (0.0, 0.0)
 
 
-class _CountMetric(BatchMetric):
-    """基于 (pred, target) 计数的分类指标公共基类，跨 GPU 自动合并计数。
+class _CountMetric(Metric):
+    """基于 (pred, target) 计数的分类指标公共基类。
 
-    计数型指标的全局结果（如 macro F1）无法由各 batch 值加权平均还原，
-    因此重写 state / merge_states 以计数状态参与框架的同步合并，并重写
-    _consume 把 compute_batch 的逐样本预测对累积为计数（feed 仍由
-    基类负责：接收观测并按形参名转发给 compute_batch）。
+    update 返回本批次逐样本预测对的计数 {(pred, target): 次数}，框架
+    自动按键求和跨 GPU 合并；子类实现 _from_counts()（经基类 compute
+    调用）从合并后的计数算出全局结果，如 macro F1、混淆矩阵。
     """
 
     def __init__(
@@ -125,30 +127,19 @@ class _CountMetric(BatchMetric):
         self.num_classes = num_classes
         self.threshold = threshold
         self._predictor = predictor or preds_from_logits
-        self._counts: Dict[Tuple[int, int], float] = defaultdict(float)
 
-    def compute_batch(self, logits: Any, labels: Any) -> List[Tuple[int, int]]:
+    def update(self, logits: Any, labels: Any) -> Dict[Tuple[int, int], float]:
         preds = self._predictor(logits, self.num_classes, self.threshold, None)
         targets = _plain(labels)
         _check_pair(preds, targets)
-        return [(int(p), int(t)) for p, t in zip(preds, targets)]
+        counts: Dict[Tuple[int, int], float] = {}
+        for p, t in zip(preds, targets):  # batch 内先聚合，重复对累加
+            key = (int(p), int(t))
+            counts[key] = counts.get(key, 0.0) + 1.0
+        return counts
 
-    def _consume(self, out: List[Tuple[int, int]]) -> None:
-        for key in out:
-            self._counts[key] += 1.0
-
-    def state(self) -> Dict[Tuple[int, int], float]:
-        return dict(self._counts)
-
-    def merge_states(self, states: List[Dict[Tuple[int, int], float]]) -> Any:
-        counts: Dict[Tuple[int, int], float] = defaultdict(float)
-        for s in states:
-            for key, n in s.items():
-                counts[key] += n
+    def compute(self, counts: Dict[Tuple[int, int], float]) -> Any:
         return self._from_counts(counts)
-
-    def reset(self) -> None:
-        self._counts = defaultdict(float)
 
     def _from_counts(self, counts: Dict[Tuple[int, int], float]) -> Any:
         raise NotImplementedError
@@ -292,7 +283,7 @@ def _rank_auc(scores: List[float], labels: List[int]) -> float:
     return (rank_sum_pos - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 
 
-class AUC(BatchMetric):
+class AUC(Metric):
     """ROC AUC（阈值无关的排序指标）。
 
     二分类：logits 为一维正类得分（(N, 2) 亦可，默认取第 pos_index 列），
@@ -301,17 +292,16 @@ class AUC(BatchMetric):
     class_index，配合 "auc/class_0" 式命名由 Web 端按前缀分组绘图；
     未指定 class_index 的多分类输入会报错提示。
 
-    跨 GPU：状态为逐样本 (得分, 是否正类) 对，合并即拼接后整体计算，
-    与单进程全量结果一致。
+    跨 GPU：增量观测为逐样本 (得分, 是否正类) 对，合并即拼接后整体
+    计算，与单进程全量结果一致（列表拼接由框架自动完成）。
     """
 
     def __init__(self, pos_index: int = 1, class_index: Optional[int] = None):
         super().__init__()
         self.pos_index = pos_index
         self.class_index = class_index
-        self._pairs: List[Tuple[float, int]] = []
 
-    def compute_batch(self, logits: Any, labels: Any) -> List[Tuple[float, int]]:
+    def update(self, logits: Any, labels: Any) -> List[Tuple[float, bool]]:
         rows = _plain(logits)
         targets = _plain(labels)
         _check_pair(rows, targets)
@@ -327,17 +317,7 @@ class AUC(BatchMetric):
             raise ValueError("一维输入为二分类正类得分，请勿设置 class_index")
         return [(float(s), bool(t)) for s, t in zip(rows, targets)]
 
-    def _consume(self, out: List[Tuple[float, int]]) -> None:
-        self._pairs.extend(out)
-
-    def state(self) -> List[Tuple[float, int]]:
-        return list(self._pairs)
-
-    def merge_states(self, states: List[List[Tuple[float, int]]]) -> float:
-        pairs = [p for s in states for p in s]
+    def compute(self, pairs: List[Tuple[float, bool]]) -> float:
         if not pairs:
             return float("nan")
         return _rank_auc([s for s, _ in pairs], [1 if t else 0 for _, t in pairs])
-
-    def reset(self) -> None:
-        self._pairs = []

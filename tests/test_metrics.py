@@ -25,18 +25,18 @@ def test_mean_with_count():
     m = Mean()
     m.feed(1.0, 2)   # count 2（结果 = (1+2×2)/3）
     m.feed(4.0, 2)
-    assert m.compute() == pytest.approx(2.5)
+    assert m.result() == pytest.approx(2.5)
 
 
 def test_mean_default_count():
     m = Mean()
     for v in (1.0, 2.0, 3.0):
         m.feed(v)
-    assert m.compute() == pytest.approx(2.0)
+    assert m.result() == pytest.approx(2.0)
 
 
 def test_mean_empty_is_nan():
-    assert Mean().compute() != Mean().compute()  # NaN
+    assert Mean().result() != Mean().result()  # NaN
 
 
 def test_sum_last_count():
@@ -47,18 +47,18 @@ def test_sum_last_count():
         s.feed(v)
         last.feed(v)
         cnt.feed()
-    assert s.compute() == pytest.approx(6.0)
-    assert last.compute() == pytest.approx(2.0)
-    assert cnt.compute() == pytest.approx(3.0)
+    assert s.result() == pytest.approx(6.0)
+    assert last.result() == pytest.approx(2.0)
+    assert cnt.result() == pytest.approx(3.0)
 
 
 def test_reset():
     m = Mean()
     m.feed(5.0)
     m.reset()
-    assert m.compute() != m.compute()  # 重置后为 NaN
+    assert m.result() != m.result()  # 重置后为 NaN
     m.feed(2.0)
-    assert m.compute() == pytest.approx(2.0)
+    assert m.result() == pytest.approx(2.0)
 
 
 def test_accepts_tensor_like():
@@ -71,41 +71,28 @@ def test_accepts_tensor_like():
 
     m = Mean()
     m.feed(FakeTensor(2.0), FakeTensor(4.0))
-    assert m.compute() == pytest.approx(2.0)
+    assert m.result() == pytest.approx(2.0)
 
 
 # ---------------------------------------------------------------- 自定义指标
 class EpochAcc(Metric):
-    """epoch 级自定义指标示例：用混淆计数算准确率。"""
+    """epoch 级自定义指标示例：只写增量与计算，多卡合并交给框架。"""
 
-    def __init__(self):
-        self.correct = 0.0
-        self.total = 0.0
+    def update(self, correct, total):
+        return {"correct": float(correct), "total": float(total)}
 
-    def feed(self, correct, total):
-        self.correct += float(correct)
-        self.total += float(total)
-
-    def state(self):
-        return {"correct": self.correct, "total": self.total}
-
-    def merge_states(self, states):
-        correct = sum(s["correct"] for s in states)
-        total = sum(s["total"] for s in states)
+    def compute(self, correct, total):
         return correct / total if total else float("nan")
-
-    def reset(self):
-        self.correct = self.total = 0.0
 
 
 def test_custom_metric_epoch_level():
     acc = EpochAcc()
     acc.feed(8, 10)
     acc.feed(9, 10)
-    assert acc.compute() == pytest.approx(0.85)
+    assert acc.result() == pytest.approx(0.85)
     acc.reset()
     acc.feed(5, 10)
-    assert acc.compute() == pytest.approx(0.5)
+    assert acc.result() == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------- 单批次指标（BatchMetric）
@@ -123,15 +110,15 @@ def test_batch_metric_single_function():
     m.feed(logits=[0.9, 0.2, 0.7], labels=[1, 0, 0])  # 命中 2/3
     m.feed([0.1, 0.8], [0, 1])                        # 位置喂入亦可：命中 2/2
     # 按样本数加权：全局 4/5，而非各 batch 平均值的平均
-    assert m.compute() == pytest.approx(4 / 5)
+    assert m.result() == pytest.approx(4 / 5)
 
 
 def test_batch_metric_empty_and_reset():
     m = PairAcc()
-    assert m.compute() != m.compute()  # 无观测 -> NaN
+    assert m.result() != m.result()  # 无观测 -> NaN
     m.feed(logits=[0.9], labels=[1])
     m.reset()
-    assert m.compute() != m.compute()
+    assert m.result() != m.result()
 
 
 def test_batch_metric_custom_count():
@@ -142,7 +129,7 @@ def test_batch_metric_custom_count():
     w = W()
     w.feed(value=2.0, count=3.0)
     w.feed(value=5.0, count=1.0)
-    assert w.compute() == pytest.approx((2.0 * 3.0 + 5.0) / 4.0)
+    assert w.result() == pytest.approx((2.0 * 3.0 + 5.0) / 4.0)
 
 
 def test_batch_metric_multiple_params():
@@ -160,7 +147,7 @@ def test_batch_metric_multiple_params():
         m = MaskedAcc()
         m.feed(logits=[0.9, 0.2, 0.7], labels=[1, 1, 0], mask=[1, 0, 1], step=123)  # 1/2
         m.feed(labels=[0], logits=[0.1], mask=[1])                                  # 1/1
-        assert m.compute() == pytest.approx(2 / 3)
+        assert m.result() == pytest.approx(2 / 3)
 
 
 def test_batch_metric_missing_param():
@@ -177,7 +164,7 @@ def test_batch_metric_merge_across_ranks(monkeypatch):
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     m = PairAcc()
     m.feed(logits=[0.9], labels=[1])
-    assert m.compute() == pytest.approx(2 / 3)
+    assert m.result() == pytest.approx(2 / 3)
 
 
 def test_group_feed_dispatch():
@@ -255,16 +242,16 @@ def test_group_merge_across_ranks(monkeypatch):
 
 
 def test_metric_merge_states_multi_rank(monkeypatch):
-    # rank0: sum=4, count=2；rank1: sum=1, count=1 -> 全局 5/3
+    # rank0: total=4, count=2；rank1: total=1, count=1 -> 全局 5/3
     def fake_gather(states):
-        other = {"sum": 1.0, "count": 1.0}
+        other = {"total": 1.0, "count": 1.0}
         return [states, other]
 
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     m = Mean()
     m.feed(2.0, 2.0)
     m.feed(2.0, 0.0)  # 不改变 count 和（count=0 的观测）
-    assert m.compute() == pytest.approx(5.0 / 3.0)
+    assert m.result() == pytest.approx(5.0 / 3.0)
 
 
 def test_group_single_gather_for_all_metrics(monkeypatch):
@@ -272,8 +259,11 @@ def test_group_single_gather_for_all_metrics(monkeypatch):
 
     def fake_gather(states):
         calls.append(1)
-        # 模拟另一 rank：每个指标状态都乘 2
-        return [states, [{k: v * 2 for k, v in s.items()} for s in states]]
+
+        def double(s):  # 模拟另一 rank：每个指标状态都乘 2
+            return {k: v * 2 for k, v in s.items()} if isinstance(s, dict) else s * 2
+
+        return [states, [double(s) for s in states]]
 
     monkeypatch.setattr("melog.metrics.group.gather_object", fake_gather)
     group = MetricGroup({"loss": Mean(), "total": Sum()})

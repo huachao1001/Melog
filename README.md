@@ -263,29 +263,25 @@ for logits, labels, mask in StepsBar(loader, epoch=epoch, metrics=metrics):
 `melog.scalar(metrics)` 跨 GPU 合并记录，`metrics.reset()` 清零开启下一轮。
 
 **epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
-继承 `Metric` 实现完整契约，跨 GPU 状态收集仍由基类完成：
+继承 `Metric` 只写两个纯函数——`update()` 返回本批次贡献的增量，
+`compute()` 由合并后的总量算出全局结果；增量怎么累积、怎么跨 GPU 合并
+（数值求和 / 字典按键合并 / 列表拼接）全部由框架自动完成，无需感知多卡：
 
 ```python
 from melog import Metric
 
 class F1(Metric):
     """epoch 末才能计算的指标：累积混淆计数，末尾统一算。"""
-    def __init__(self):
-        self.tp = self.fp = self.fn = 0.0
+    def update(self, tp, fp, fn):       # 每个 batch：本批次贡献的计数
+        return {"tp": tp, "fp": fp, "fn": fn}
 
-    def feed(self, tp, fp, fn):            # 每个 batch 累积本地计数
-        self.tp += tp; self.fp += fp; self.fn += fn
-
-    def state(self):                        # 导出可 pickle 的本地状态
-        return [self.tp, self.fp, self.fn]
-
-    def merge_states(self, states):         # states: 所有 rank 的状态（按 rank 顺序）
-        tp = sum(s[0] for s in states); fp = sum(s[1] for s in states)
-        fn = sum(s[2] for s in states)
+    def compute(self, tp, fp, fn):      # epoch 末：由总量算出全局值
         return 2 * tp / (2 * tp + fp + fn) if tp + fp + fn else float("nan")
 
-    def reset(self):
-        self.tp = self.fp = self.fn = 0.0
+# 使用（通常放进 MetricGroup / StepsBar 自动记录）：
+f1 = F1()
+f1.feed(tp=2, fp=1, fn=0)   # 位置或具名喂入均可
+f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 ```
 
 ## 多 GPU

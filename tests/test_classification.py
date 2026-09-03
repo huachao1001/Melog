@@ -49,7 +49,7 @@ def test_preds_length_mismatch_raises():
 def test_accuracy_binary():
     acc = Accuracy()  # 二分类
     acc.feed([0.9, 0.8, 0.6, 0.3, 0.2], [1, 0, 1, 1, 0])
-    assert acc.compute() == pytest.approx(3 / 5)
+    assert acc.result() == pytest.approx(3 / 5)
 
 
 def test_accuracy_multiclass_tensor():
@@ -66,7 +66,7 @@ def test_accuracy_multiclass_tensor():
     )
     labels = torch.tensor([0, 1, 2, 2, 1])
     acc.feed(logits, labels)
-    assert acc.compute() == pytest.approx(3 / 5)
+    assert acc.result() == pytest.approx(3 / 5)
 
 
 def test_accuracy_topk():
@@ -85,16 +85,16 @@ def test_accuracy_topk():
     labels = torch.tensor([0, 1, 2, 2, 1])
     for acc in (acc1, acc2):
         acc.feed(logits, labels)
-    assert acc1.compute() == pytest.approx(3 / 5)
-    assert acc2.compute() == pytest.approx(4 / 5)
+    assert acc1.result() == pytest.approx(3 / 5)
+    assert acc2.result() == pytest.approx(4 / 5)
 
 
 def test_accuracy_reset_and_empty():
     acc = Accuracy()
-    assert acc.compute() != acc.compute()  # 无观测 -> NaN
+    assert acc.result() != acc.result()  # 无观测 -> NaN
     acc.feed([0.9, 0.1], [1, 0])
     acc.reset()
-    assert acc.compute() != acc.compute()
+    assert acc.result() != acc.result()
 
 
 # ---------------------------------------------------------------- Precision / Recall / F1
@@ -105,9 +105,9 @@ def test_prf_binary():
     for m in (p, r, f1):
         m.feed(scores, labels)
     # 预测 [1,1,1,0,0]：tp=2 fp=1 fn=1 tn=1
-    assert p.compute() == pytest.approx(2 / 3)
-    assert r.compute() == pytest.approx(2 / 3)
-    assert f1.compute() == pytest.approx(2 / 3)
+    assert p.result() == pytest.approx(2 / 3)
+    assert r.result() == pytest.approx(2 / 3)
+    assert f1.result() == pytest.approx(2 / 3)
 
 
 def test_prf_multiclass_averages():
@@ -126,11 +126,11 @@ def test_prf_multiclass_averages():
     f1_weighted = F1(num_classes=3, average="weighted")
     for m in (p_macro, r_macro, f1_macro, f1_micro, f1_weighted):
         m.feed(logits, labels)
-    assert p_macro.compute() == pytest.approx(2 / 3)
-    assert r_macro.compute() == pytest.approx(2 / 3)
-    assert f1_macro.compute() == pytest.approx((2 / 3 + 2 / 3 + 0.5) / 3)
-    assert f1_micro.compute() == pytest.approx(0.6)
-    assert f1_weighted.compute() == pytest.approx(0.6)
+    assert p_macro.result() == pytest.approx(2 / 3)
+    assert r_macro.result() == pytest.approx(2 / 3)
+    assert f1_macro.result() == pytest.approx((2 / 3 + 2 / 3 + 0.5) / 3)
+    assert f1_micro.result() == pytest.approx(0.6)
+    assert f1_weighted.result() == pytest.approx(0.6)
 
 
 def test_prf_unknown_average():
@@ -142,39 +142,39 @@ def test_prf_class_index_single_class():
     # 逐类指标：只看指定类别（one-vs-rest）
     rec2 = Recall(num_classes=3, class_index=2)
     rec2.feed([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.1, 0.8]], [2, 0, 2])
-    assert rec2.compute() == pytest.approx(1.0)  # 类 2：tp=2, fn=0
+    assert rec2.result() == pytest.approx(1.0)  # 类 2：tp=2, fn=0
 
     rec2.reset()
     rec2.feed([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.9, 0.3]], [2, 0, 2])
-    assert rec2.compute() == pytest.approx(0.5)  # tp=1, fn=1
+    assert rec2.result() == pytest.approx(0.5)  # tp=1, fn=1
     prec2 = Precision(num_classes=3, class_index=2)
     prec2.feed([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.9, 0.3]], [2, 0, 2])
-    assert prec2.compute() == pytest.approx(1.0)  # tp=1, fp=0
+    assert prec2.result() == pytest.approx(1.0)  # tp=1, fp=0
 
     # 与 macro 对比：类 1 从未作为真实标签出现（recall 为 NaN 被跳过），
     # macro = (1.0 + 0.5) / 2
     r_macro = Recall(num_classes=3)
     r_macro.feed([[0.1, 0.2, 0.9], [0.9, 0.1, 0.2], [0.2, 0.9, 0.3]], [2, 0, 2])
-    assert r_macro.compute() == pytest.approx(0.75)
+    assert r_macro.result() == pytest.approx(0.75)
 
 
 def test_prf_class_index_absent_class_is_nan():
     rec = Recall(num_classes=3, class_index=1)
     rec.feed([[0.9, 0.1, 0.2]], [0])
-    assert rec.compute() != rec.compute()  # 该类无样本 -> NaN
+    assert rec.result() != rec.result()  # 该类无样本 -> NaN
 
 
 # ---------------------------------------------------------------- ConfusionMatrix
 def test_confusion_binary():
     cm = ConfusionMatrix()
     cm.feed([0.9, 0.8, 0.6, 0.3, 0.2], [1, 0, 1, 1, 0])
-    assert cm.compute() == [[1.0, 1.0], [1.0, 2.0]]  # [[tn, fp], [fn, tp]]
+    assert cm.result() == [[1.0, 1.0], [1.0, 2.0]]  # [[tn, fp], [fn, tp]]
 
 
 def test_confusion_multiclass_infer_classes():
     cm = ConfusionMatrix()
     cm.feed([[0.9, 0.05, 0.05], [0.8, 0.1, 0.1]], [0, 2])
-    assert cm.compute() == [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    assert cm.result() == [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
 
 
 def test_confusion_multiclass_explicit_k():
@@ -183,7 +183,7 @@ def test_confusion_multiclass_explicit_k():
         [[0.9, 0.05, 0.05], [0.4, 0.5, 0.1], [0.2, 0.3, 0.5], [0.8, 0.1, 0.1], [0.1, 0.2, 0.7]],
         [0, 1, 2, 2, 1],
     )
-    assert cm.compute() == [
+    assert cm.result() == [
         [1.0, 0.0, 0.0],
         [0.0, 1.0, 1.0],
         [1.0, 0.0, 1.0],
@@ -194,28 +194,28 @@ def test_confusion_multiclass_explicit_k():
 def test_auc_binary_perfect_and_inverted():
     auc = AUC()
     auc.feed([0.9, 0.8, 0.3, 0.1], [1, 1, 0, 0])
-    assert auc.compute() == pytest.approx(1.0)
+    assert auc.result() == pytest.approx(1.0)
     auc.reset()
     auc.feed([0.1, 0.3, 0.8, 0.9], [1, 1, 0, 0])
-    assert auc.compute() == pytest.approx(0.0)
+    assert auc.result() == pytest.approx(0.0)
 
 
 def test_auc_known_value_and_ties():
     auc = AUC()
     # 正类得分 {0.9, 0.2}，负类 {0.1, 0.8}：赢 3 对输 1 对
     auc.feed([0.9, 0.1, 0.8, 0.2], [1, 0, 0, 1])
-    assert auc.compute() == pytest.approx(0.75)
+    assert auc.result() == pytest.approx(0.75)
     # 全部并列 -> 0.5
     auc.reset()
     auc.feed([0.5, 0.5, 0.5, 0.5], [1, 1, 0, 0])
-    assert auc.compute() == pytest.approx(0.5)
+    assert auc.result() == pytest.approx(0.5)
 
 
 def test_auc_2d_binary_uses_positive_column():
     auc = AUC()
     auc.feed([[0.1, 0.9], [0.8, 0.2], [0.4, 0.6], [0.7, 0.3]], [1, 0, 1, 0])
     # 正类列得分 [0.9, 0.6]，负类列 [0.2, 0.3] -> 全胜
-    assert auc.compute() == pytest.approx(1.0)
+    assert auc.result() == pytest.approx(1.0)
 
 
 def test_auc_multiclass_requires_class_index():
@@ -237,18 +237,18 @@ def test_auc_multiclass_one_vs_rest():
     a0.feed(logits, labels)
     # 类 0 列得分 [0.3, 0.6, 0.2, 0.9, 0.7]；正类 {0.9, 0.6}，负类 {0.3, 0.2, 0.7}
     # 0.9 胜 3 对，0.6 胜 2 对（输给 0.7）-> 5/6
-    assert a0.compute() == pytest.approx(5 / 6)
+    assert a0.result() == pytest.approx(5 / 6)
     # 与"取出该列直接算二分类 AUC"等价
     direct = AUC()
     direct.feed([0.3, 0.6, 0.2, 0.9, 0.7], [0, 1, 0, 1, 0])
-    assert direct.compute() == pytest.approx(a0.compute())
+    assert direct.result() == pytest.approx(a0.result())
 
 
 def test_auc_empty_is_nan():
     auc = AUC()
-    assert auc.compute() != auc.compute()
+    assert auc.result() != auc.result()
     auc.feed([0.9, 0.1], [1, 1])  # 只有正类 -> 无定义
-    assert auc.compute() != auc.compute()
+    assert auc.result() != auc.result()
 
 
 # ---------------------------------------------------------------- 多 rank 合并逻辑
@@ -260,7 +260,7 @@ def test_accuracy_merge_across_ranks(monkeypatch):
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     acc = Accuracy()
     acc.feed([0.9], [1])
-    assert acc.compute() == pytest.approx(4 / 6)
+    assert acc.result() == pytest.approx(4 / 6)
 
 
 def test_prf_merge_across_ranks(monkeypatch):
@@ -271,7 +271,7 @@ def test_prf_merge_across_ranks(monkeypatch):
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     p = Precision()
     p.feed([0.9, 0.8, 0.6], [1, 0, 1])
-    assert p.compute() == pytest.approx(5 / 6)
+    assert p.result() == pytest.approx(5 / 6)
 
 
 def test_auc_merge_across_ranks(monkeypatch):
@@ -285,7 +285,7 @@ def test_auc_merge_across_ranks(monkeypatch):
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     auc = AUC()
     auc.feed(scores[:3], labels[:3])
-    assert auc.compute() == pytest.approx(8 / 9)
+    assert auc.result() == pytest.approx(8 / 9)
 
 
 # ---------------------------------------------------------------- MetricGroup / Melog 集成

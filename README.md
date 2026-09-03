@@ -296,9 +296,51 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 ```
 
-- 各 rank 的指标自动 all_reduce 合并（`reduce_op="mean"`，可选 `"sum"`）
-- 仅 rank0 持久化、启动 Web、渲染进度条，其余 rank 静默
-- 指标值支持 float / int / 0 维 tensor
+代码无需修改：每个 rank 进程各自跑同一份 melog 代码，`melog.init` 后
+库自动感知分布式环境（`torch.distributed` 已初始化即生效；未装 torch
+或单进程运行则所有集合操作退化为本地直通，行为完全一致）。
+
+### 卡间如何传递
+
+通信只发生在"记录"时，`feed()` 永远零通信。两种原语按数据形态分工：
+
+- **`all_reduce`（数值求和）**：`melog.scalar({...})` 的普通数值指标
+  （float / int / 0 维 tensor，内部统一转 float64 张量）。每个 rank 的
+  同名指标相加后除以卡数（`reduce_op="mean"`，可选 `"sum"` 不除），
+  各 rank 得到一致的全局值。
+- **`all_gather_object`（pickle 收集）**：`MetricGroup` 的合并。每个
+  rank 把本地状态整体 pickle 后互相收集（结果按 rank 顺序排列），
+  再用各指标的合并规则还原全局值——实时指标（Mean / Accuracy 等）
+  状态是 `[加权总和, 观测数]` 两行数值，按观测数加权平均；epoch 级
+  指标（F1 / AUC 等）状态是 prepare 备料的增量，数值求和、字典按键
+  合并、列表拼接。一组指标无论几个，**每个 epoch 只做一次收集**。
+
+各 rank 状态是纯 Python 数据（数值 / 嵌套字典 / 列表），可 pickle 即可，
+不要求张量、不要求同构——各 rank 观测到的类别可以不同（如 F1 的计数
+字典按键求和自动对齐）。
+
+### rank 分工与同步纪律
+
+- **rank0** 负责所有落盘与展示：JSONL 日志、Web 服务、进度条渲染、
+  feed 实时值的写入；其余 rank 静默但仍参与每次集合操作（集合操作
+  是全员的，谁都不能缺席）。
+- **同步纪律**：所有 rank 必须以相同顺序、相同次数执行集合操作，
+  否则互相等待挂死。库的 API 按此设计——StepsBar 只在循环自然结束时
+  触发自动合并（提前 break / 异常不触发，因为各 rank 迭代进度可能
+  不一致）；手动 `melog.scalar(...)` / `melog.scalar(metrics)` 时
+  确保所有 rank 执行同一位置即可（正常训练代码天然满足）。
+- `reduce_op` 只影响 `melog.scalar({...})` 的数值合并；MetricGroup
+  的合并规则由指标语义决定（加权平均 / 求和 / 拼接），不受它影响。
+
+### 时序一览（2 卡示例）
+
+```text
+feed()   ── rank0: 本地累积 + 实时值落盘(write=True)   零通信
+         ── rank1: 本地累积
+epoch 末 ── all_gather_object(MetricGroup 全组状态, 1 次)
+         ── 各 rank 各自合并出一致的全局值
+         ── rank0: 全局值写日志/面板 + reset 清零
+```
 
 ## API
 

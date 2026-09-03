@@ -43,7 +43,7 @@ logger.finish()   # 落盘剩余指标并停止 Web 服务
 ```python
 import melog
 
-mlog = melog.init(project="my-exp")     # 或 melog.Melog(...)，自动成为全局活动实例
+logger = melog.init(project="my-exp")   # 或 melog.Melog(...)，自动成为全局活动实例
 
 # 任意其他模块中：
 import melog
@@ -53,7 +53,7 @@ melog.finish()                          # 训练结束收尾
 ```
 
 - 最近一次创建的实例即全局活动实例（`melog.current()` 取回），`finish()` 后清空
-- 模块级 `log / log_group / log_image / log_audio / set_colors / finish` 与实例方法等价
+- 模块级 `scalar / log_group / image / audio / set_colors / finish` 与实例方法等价
 - 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
 
 ## 曲线上体现 epoch

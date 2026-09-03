@@ -229,7 +229,7 @@ for logits, labels in StepsBar(val_loader, epoch=epoch, metrics=val_metrics):
 
 **实时指标——只实现 `compute()`**：每次喂入立即用本批观测算出指标值，
 形参名和个数完全由你定义，框架按形参名自动从 `feed()` 的观测中取值回调；
-各 batch 结果按观测数加权平均、跨 GPU 合并，全部由框架完成：
+各 batch 结果按各自实际的样本数加权平均、跨 GPU 合并，全部由框架完成：
 
 ```python
 from melog import Metric
@@ -265,7 +265,7 @@ for logits, labels, mask in StepsBar(loader, epoch=epoch, metrics=metrics):
 不用 StepsBar 包裹时（如独立验证脚本）才需要手动落盘：
 `melog.scalar(metrics)` 跨 GPU 合并记录，`metrics.reset()` 清零开启下一轮。
 
-**epoch 级指标——加实现 `prepare()`**：全局结果无法由各 batch 值加权平均还原时
+**epoch 级指标——加实现 `prepare()`**：全局结果无法由各 batch 值按样本数加权平均还原时
 （如 macro F1、AUC），每次喂入先用 `prepare()`"备料"——接收同样的观测，
 返回本批次贡献的增量（数值 / 字典 / 列表），框架自动累积并跨 GPU 合并
 （数值求和、字典按键合并、列表拼接）；epoch 末把合并后的总量交给
@@ -297,10 +297,10 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 自定义 `Metric` 时**多卡对你透明，不需要写任何分布式代码**。`compute()`
 拿到的永远是框架合并好的**全量**，合并规则按指标类型：
 
-**实时指标（只实现 `compute`）**——各卡的本批值按观测数加权平均：
+**实时指标（只实现 `compute`）**——各卡的本批值按各自实际的样本数加权平均：
 
 ```text
-全局值 = Σ(各卡每批的 值 × 观测数) / Σ(各卡每批的 观测数)
+全局值 = Σ(各卡每批的 值 × 该批样本数) / Σ(各卡每批的 样本数)
 ```
 
 即框架把每卡的 `(值, 观测数)` 对累加后相除——等价于把所有卡的样本

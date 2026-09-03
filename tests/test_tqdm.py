@@ -116,8 +116,9 @@ def test_tqdm_layout_order():
         bar.update(1)
         bar.set_postfix(loss=0.5)
     line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1].rstrip()
-    assert line.endswith("[ 1/10] [0:00]")  # 计数在耗时尾段前（n 右对齐到 total 宽度）
-    assert line.index("loss=0.5") < line.index("━") < line.index("100.0%") < line.index("[ 1/10]")
+    # 段序：指标 < 条形 < 百分比 < [n/total] < 耗时尾段（n 右对齐到 total 宽度）
+    assert line.index("loss=0.5") < line.index("━") < line.index("10.0%")
+    assert line.index("10.0%") < line.index("[ 1/10]") < line.index("[0:00<")
     assert not line.startswith("train")  # 无 desc 时不显示前缀
 
 

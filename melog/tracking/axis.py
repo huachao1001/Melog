@@ -56,3 +56,34 @@ class Axis:
         if epoch is not None:
             self.epoch_step += 1
         self.step = x + 1
+
+    # ------------------------------------------------------------ 断点续训
+    def absorb(self, x: int, epoch: Optional[int]) -> None:
+        """从历史日志重建状态：吸收一条记录（只推进，不产生写入）。"""
+        if epoch is not None and epoch not in self.bases:
+            self.bases[epoch] = x  # 该 epoch 的首条记录即其全局基准
+        self.step = x + 1
+        self.last_x, self.last_epoch = x, epoch
+
+    def cut_on_rebind(self, epoch: int) -> Optional[int]:
+        """重新绑定历史 epoch 时应截断的重叠起点；无需截断返回 None。
+
+        续训后再次进入某个已写过记录的 epoch（中断残留），该 epoch 及
+        其后的一切都作废，从它的全局基准处截断。当前已绑定的 epoch 重入
+        （如嵌套进度条）不算——bind_epoch 对同 epoch 幂等。
+        """
+        base = self.bases.get(epoch)
+        if epoch != self.epoch and base is not None and base < self.step:
+            return base
+        return None
+
+    def rollback(self, cut: int, last: "tuple[Optional[int], Optional[int]]") -> None:
+        """回滚到截断点：丢弃 cut 起的坐标状态（配合文件截断使用）。
+
+        last 为截断后最后一条保留记录的 (step, epoch)；全文件无保留
+        记录时 last 为 (None, None)。
+        """
+        self.step = cut
+        for e in [e for e, b in self.bases.items() if b >= cut]:
+            del self.bases[e]
+        self.last_x, self.last_epoch = (cut - 1, None) if last[0] is None else last

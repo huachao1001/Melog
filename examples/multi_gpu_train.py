@@ -59,7 +59,7 @@ def main():
             time.sleep(0.02)
 
     if rank == 0:
-        print(f"指标已落盘: {melog.current().run_dir / 'metrics.melog'}")
+        print(f"指标已落盘: {melog.current().run_dir}")
 
 
 if __name__ == "__main__":

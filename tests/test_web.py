@@ -62,17 +62,15 @@ def test_store_snapshot_carries_epoch():
 
 
 def test_loader_parses_epoch(tmp_path):
+    from melog.storage.melog_file import MelogFile
     from melog.web.loader import LogLoader
 
-    log = tmp_path / "metrics.melog"
-    log.write_text(
-        '{"metric": "loss", "step": 0, "value": 1.0, "epoch": 0}\n'
-        '{"metric": "loss", "step": 5, "value": 0.5, "epoch": 1}\n'
-        '{"metric": "loss", "step": 6, "value": 0.4}\n'  # 旧格式无 epoch
-        "坏行跳过\n",
-        encoding="utf-8",
-    )
-    series = LogLoader.parse(log)
+    f = MelogFile(tmp_path / "metrics-1.melog")
+    f.add_batch([{"metric": "loss", "step": 0, "value": 1.0, "epoch": 0}])
+    f.add_batch([{"metric": "loss", "step": 5, "value": 0.5, "epoch": 1}])
+    f.add_batch([{"metric": "loss", "step": 6, "value": 0.4}])  # 无 epoch
+    f.close()
+    series = LogLoader.parse(tmp_path)
     assert series["loss"] == [(0, 1.0, 0), (5, 0.5, 1), (6, 0.4, None)]
 
 
@@ -123,12 +121,25 @@ def test_set_colors_updates_view(app_client):
     assert server.view.colors == {"recall/class_0": "#f00", "loss": "steelblue"}
 
 
+def _write_log(path, records=(), media=()):
+    """写一个最小二进制日志文件（测试辅助）。"""
+    from melog.storage.melog_file import MelogFile
+
+    f = MelogFile(path)
+    for rec in records:
+        f.add_batch([rec])
+    for rec in media:
+        f.append_media(rec)
+    f.close()
+    return path
+
+
 def test_load_restores_colors_sidecar(tmp_path):
     """加载历史日志时恢复其 colors.json，卸载后回到实时颜色。"""
     import json
 
-    log = tmp_path / "metrics.melog"
-    log.write_text('{"metric": "loss", "step": 0, "value": 1.0}\n', encoding="utf-8")
+    log = _write_log(tmp_path / "metrics-1.melog",
+                     records=[{"metric": "loss", "step": 0, "value": 1.0}])
     (tmp_path / "colors.json").write_text(
         json.dumps({"loss": "#123456"}), encoding="utf-8"
     )
@@ -231,11 +242,11 @@ def test_load_broadcasts_media_history(tmp_path):
     from PIL import Image
 
     Image.new("L", (4, 4)).save(run / "media/image/hist/000000003.png")
-    log = run / "metrics.melog"
-    log.write_text(
-        '{"metric": "loss", "step": 0, "value": 1.0}\n'
-        '{"type": "image", "metric": "hist", "step": 3, "file": "media/image/hist/000000003.png"}\n',
-        encoding="utf-8",
+    log = _write_log(
+        run / "metrics-1.melog",
+        records=[{"metric": "loss", "step": 0, "value": 1.0}],
+        media=[{"type": "image", "metric": "hist", "step": 3,
+                "file": "media/image/hist/000000003.png"}],
     )
     server = WebServer(store=MetricStore(), port=8988, log_file=str(tmp_path / "live" / "metrics.melog"))
     client = TestClient(server.app)
@@ -314,18 +325,15 @@ def test_load_missing_file():
     assert resp.status_code == 400
 
 
-def test_load_and_unload_jsonl(tmp_path):
-    jl = tmp_path / "metrics.melog"
-    jl.write_text(
-        '{"metric": "loss", "step": 0, "value": 1.0}\n'
-        '{"metric": "loss", "step": 1, "value": 0.5}\n'
-        "坏行不应崩溃\n",
-        encoding="utf-8",
-    )
+def test_load_and_unload_melog(tmp_path):
+    log = _write_log(tmp_path / "metrics-1.melog", records=[
+        {"metric": "loss", "step": 0, "value": 1.0},
+        {"metric": "loss", "step": 1, "value": 0.5},
+    ])
     server = WebServer(store=MetricStore(), port=8991)
     client = TestClient(server.app)
 
-    resp = client.post("/api/load", json={"path": str(jl)})
+    resp = client.post("/api/load", json={"path": str(log)})
     assert resp.json()["ok"] is True
     assert client.get("/api/metrics").json()["metrics"]["loss"] == [
         {"step": 0, "value": 1.0},
@@ -336,13 +344,13 @@ def test_load_and_unload_jsonl(tmp_path):
     assert client.get("/api/metrics").json()["metrics"] == {}
 
 
-def test_load_dir_picks_latest_jsonl(tmp_path):
-    old = tmp_path / "a" / "metrics.melog"
+def test_load_dir_picks_latest_run(tmp_path):
+    old = tmp_path / "a" / "metrics-1.melog"
     old.parent.mkdir(parents=True)
-    old.write_text('{"metric": "acc", "step": 0, "value": 0.5}\n', encoding="utf-8")
-    new = tmp_path / "b" / "metrics.melog"
+    _write_log(old, records=[{"metric": "acc", "step": 0, "value": 0.5}])
+    new = tmp_path / "b" / "metrics-1.melog"
     new.parent.mkdir(parents=True)
-    new.write_text('{"metric": "acc", "step": 0, "value": 0.9}\n', encoding="utf-8")
+    _write_log(new, records=[{"metric": "acc", "step": 0, "value": 0.9}])
     import os
 
     os.utime(old, (1, 1))  # old 更旧，应选中 new

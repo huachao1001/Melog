@@ -1,7 +1,7 @@
 """内存媒体索引：图像 / 音频条目（实时），线程安全。
 
 条目按 step 去重（同 step 重复记录视为覆盖），超出上限丢弃最旧；
-完整历史始终在 JSONL 日志里，由 MediaLoader 按需加载。
+完整历史始终在日志文件里，由 MediaLoader 按需加载。
 """
 
 from __future__ import annotations

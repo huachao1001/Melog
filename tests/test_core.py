@@ -117,17 +117,25 @@ def test_reduce_invalid_type():
 
 
 # ---------------------------------------------------------------- Melog
+def read_records(run_dir) -> list:
+    """解析 run 目录全部会话日志为 (step, epoch, values) 记录列表。"""
+    from melog.storage.melog_file import MelogFileReader
+
+    out = []
+    for f in sorted(run_dir.glob("metrics*.melog")):
+        out.extend(MelogFileReader(f).records())
+    return out
+
+
 def test_scalar_records_and_persists(tmp_path):
     m = Melog(project="t", output_dir=str(tmp_path), enable_web=False, flush_every=2)
     for step in range(5):
         m.scalar({"loss": 1.0 / (step + 1)}, advance=1)
     m.close()
 
-    lines = (tmp_path / "t").glob("**/metrics.melog")
-    path = next(lines)
-    records = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
+    records = read_records(tmp_path / "t")
     assert len(records) == 5
-    assert records[0] == {"metric": "loss", "step": 0, "value": 1.0}
+    assert records[0] == (0, None, {"loss": 1.0})
 
 
 def test_scalar_returns_merged(lg):
@@ -179,23 +187,20 @@ def test_epoch_sticky_after_bar(lg):
 
 
 def test_epoch_records_persist_with_epoch_key(lg):
-    """绑定 epoch 后 JSONL 记录带 epoch 字段。"""
+    """绑定 epoch 后日志记录带 epoch 坐标。"""
     for _ in StepsBar(range(1), epoch=2):
         lg.scalar({"a": 1.5})
     lg.close()
-    path = next(lg.run_dir.parent.glob("**/metrics.melog"))
-    rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert rec == {"metric": "a", "step": 0, "value": 1.5, "epoch": 2}
+    records = read_records(lg.run_dir)
+    assert records == [(0, 2, {"a": 1.5})]
 
 
 def test_no_epoch_records_omit_epoch_key(lg):
-    """未启用 epoch 时 JSONL 记录不带 epoch 字段（兼容旧格式）。"""
+    """未启用 epoch 时记录不带 epoch 坐标。"""
     lg.scalar({"a": 1.0})
     lg.close()
-    path = next(lg.run_dir.parent.glob("**/metrics.melog"))
-    rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert rec == {"metric": "a", "step": 0, "value": 1.0}
-    assert "epoch" not in rec
+    records = read_records(lg.run_dir)
+    assert records == [(0, None, {"a": 1.0})]
 
 
 def test_group_compute_uses_bound_epoch(lg):

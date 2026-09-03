@@ -17,10 +17,14 @@ class MetricStore:
         self._pending: List[Dict] = []  # 待落盘队列
         self._lock = threading.Lock()
 
-    def add(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
+    def add(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None,
+            persist: bool = True) -> None:
+        """记录一批指标；persist=False 仅入展示历史（如续训回灌，已落盘）。"""
         with self._lock:
             for name, value in metrics.items():
                 self._data[name].append((step, float(value), epoch))
+                if not persist:
+                    continue
                 rec = {"metric": name, "step": step, "value": float(value)}
                 if epoch is not None:
                     rec["epoch"] = epoch
@@ -38,7 +42,14 @@ class MetricStore:
             }
 
     def drain(self) -> List[Dict]:
-        """取出尚未持久化的记录（用于 JSONL 落盘），取出后清空。"""
+        """取出尚未持久化的记录（用于落盘），取出后清空。"""
         with self._lock:
             drained, self._pending = self._pending, []
             return drained
+
+    def truncate(self, cut_step: int) -> None:
+        """丢弃 step >= cut_step 的历史与未落盘记录（续训清除重叠区）。"""
+        with self._lock:
+            for name, points in self._data.items():
+                self._data[name] = [p for p in points if p[0] < cut_step]
+            self._pending = [r for r in self._pending if r["step"] < cut_step]

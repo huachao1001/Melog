@@ -1,6 +1,5 @@
 """分类指标单元测试：预测函数、Accuracy / P / R / F1 / AUC / 混淆矩阵、多 rank 合并、集成。"""
 
-import json
 
 import pytest
 
@@ -308,6 +307,8 @@ def test_group_compute_persists_accuracy(tmp_path):
     group.reset()
     lg.close()
 
-    path = next((tmp_path / "t").glob("**/metrics.melog"))
-    records = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
-    assert records == [{"metric": "acc", "step": 0, "value": 1.0}]
+    from melog.storage.melog_file import MelogFileReader
+
+    path = next((tmp_path / "t").glob("metrics*.melog"))
+    records = [r for rec in MelogFileReader(path).records() for r in rec[2].items()]
+    assert records == [("acc", 1.0)]

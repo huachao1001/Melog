@@ -138,8 +138,7 @@ class StepsBar(tqdm):
         if metrics is not None and not isinstance(metrics, MetricGroup):
             raise TypeError(f"metrics 须为 MetricGroup，收到 {type(metrics).__name__}")
         if epoch is not None:
-            with host._lock:
-                host._axis.bind_epoch(epoch)
+            host._bind_epoch(epoch)  # 续训时该 epoch 已有记录会先截断重叠区
         if metrics is not None:
 
             def _on_item(item: Any) -> None:

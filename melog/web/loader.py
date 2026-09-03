@@ -1,64 +1,88 @@
-"""日志文件解析：metrics.melog → 指标时间序列 / 媒体索引。"""
+"""日志文件解析：metrics-*.melog 二进制会话文件 → 指标时间序列 / 媒体索引。
+
+同一 run 目录下的多个会话文件（每次启动一个，带时间戳）在加载时按
+文件名顺序合并成完整时间线。
+"""
 
 from __future__ import annotations
-
-import json
+import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Union
+
+from ..storage.melog_file import MelogFileReader
 
 Point = Tuple[int, float, Optional[int]]
+_PATHS = Union[str, Path, Iterable[Union[str, Path]]]
+
+# 会话文件名：metrics-<YYYYmmdd_HHMMSS>[-<同秒序号>].melog
+_SESSION_RE = re.compile(r"^metrics-(\d{8}_\d{6})(?:-(\d+))?\.melog$")
+
+
+def _session_sort_key(path: Path) -> Tuple[str, int]:
+    """按启动时间排序（同秒序号次之）；不符合命名的文件排最前。"""
+    m = _SESSION_RE.match(path.name)
+    if m:
+        return (m.group(1), int(m.group(2) or 0))
+    return ("", 0)
 
 
 class LogLoader:
-    """把 JSONL 日志解析为 {metric: [(step, value, epoch), ...]}，坏行自动跳过。
-
-    epoch 为可选字段：记录里没有或不合法时该点 epoch 记为 None。
-    媒体记录（含 type 字段）没有 value，自动跳过，由 MediaLoader 解析。
-    """
+    """把 melog 二进制日志解析为 {metric: [(step, value, epoch), ...]}。"""
 
     @staticmethod
-    def parse(path: Path) -> Dict[str, List[Point]]:
+    def session_files(target: Union[str, Path]) -> List[Path]:
+        """把文件 / 目录参数展开为要合并的会话文件列表（按时间戳序）。
+
+        - 目录：取其中 metrics*.melog（无则回退 *.melog；再无则递归
+          扫描并选中最近写入的那个 run 目录，兼容旧版时间戳子目录布局）
+        - metrics* 文件：合并其所在目录的全部会话文件（一次训练的完整曲线）
+        - 其他文件：单独解析
+        """
+        p = Path(target)
+        if p.is_dir():
+            files = sorted(p.glob("metrics*.melog"), key=_session_sort_key) \
+                or sorted(p.glob("*.melog"))
+            if files:
+                return files
+            nested = sorted(p.rglob("*.melog"), key=lambda f: f.stat().st_mtime)
+            return sorted(nested[-1].parent.glob("*.melog")) if nested else []
+        if p.name.startswith("metrics") and p.parent.is_dir():
+            files = sorted(p.parent.glob("metrics*.melog"), key=_session_sort_key)
+            return files or [p]
+        return [p]
+
+    @staticmethod
+    def _paths(target: _PATHS) -> List[Path]:
+        """文件 / 目录 / 多路径参数统一展开为会话文件列表。"""
+        if isinstance(target, (str, Path)):
+            return LogLoader.session_files(target)
+        return [Path(t) for t in target]
+
+    @staticmethod
+    def parse(target: _PATHS) -> Dict[str, List[Point]]:
+        """解析一个或多个会话文件为指标时间序列；坏文件自动跳过。"""
         series: Dict[str, List[Point]] = defaultdict(list)
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if "metric" in rec and "step" in rec and "value" in rec:
-                    epoch = rec.get("epoch")
-                    if not isinstance(epoch, (int, float)):
-                        epoch = None
-                    series[rec["metric"]].append((rec["step"], float(rec["value"]), epoch))
+        for path in LogLoader._paths(target):
+            for step, epoch, values in MelogFileReader(path).records():
+                for name, value in values.items():
+                    series[name].append((step, float(value), epoch))
         for pts in series.values():
             pts.sort(key=lambda p: p[0])
         return dict(series)
 
 
 class MediaLoader:
-    """把 JSONL 日志中的媒体记录解析为 {kind: {name: [entry, ...]}}。
+    """把 melog 二进制日志中的媒体记录解析为 {kind: {name: [entry, ...]}}。
 
-    记录格式：{"type": "image"|"audio", "metric": name, "step": n,
-    "epoch": 可选, "file": 相对日志目录的媒体文件路径, "sr": 音频可选}。
-    entry 为 {step, epoch?, file, sr?}，按 step 升序。
+    entry 为 {step, epoch?, file, sr?, caption?}，按 step 升序。
     """
 
     @staticmethod
-    def parse(path: Path, max_per_name: int = 1000) -> Dict[str, Dict[str, List[Dict]]]:
+    def parse(target: _PATHS, max_per_name: int = 1000) -> Dict[str, Dict[str, List[Dict]]]:
         items: Dict[str, Dict[str, List[Dict]]] = {"image": {}, "audio": {}}
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        for path in LogLoader._paths(target):
+            for rec in MelogFileReader(path).media():
                 kind = rec.get("type")
                 if kind not in items:
                     continue

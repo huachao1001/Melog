@@ -1,9 +1,9 @@
 """命令行入口：melog <path> 快速查看训练日志。
 
 用法：
-    melog F:/runs/exp1/metrics.jsonl   # 指定日志文件
-    melog F:/runs/exp1                 # 指定目录（自动取最新 metrics.jsonl）
-    melog                              # 缺省在 ./melog_runs 中查找
+    melog runs/exp1/metrics-20260903_101010.melog   # 指定日志文件
+    melog runs/exp1                                 # 指定目录（合并全部会话文件）
+    melog                                           # 缺省在 ./melog_runs 中查找
 """
 
 from __future__ import annotations
@@ -21,14 +21,14 @@ from ..web.store import MetricStore
 
 
 def _resolve_log_file(path: Path) -> Path:
-    """文件直接用；目录取其中最新的 metrics.jsonl。"""
+    """文件直接用；目录取其中最新的 .melog 日志。"""
     if path.is_file():
         return path
     return FileBrowser.find_latest_log(path)
 
 
 def _load_into_store(store: MetricStore, log_file: Path) -> int:
-    """把日志灌入内存 store，作为静态视图数据源。"""
+    """把日志（同 run 目录的会话文件合并）灌入内存 store，作为静态视图数据源。"""
     series = LogLoader.parse(log_file)
     count = 0
     for name, pts in series.items():

@@ -90,23 +90,23 @@ class ApiRoutes:
         path = Path(body.get("path", ""))
         if not path.exists():
             return JSONResponse(status_code=400, content={"error": f"路径不存在: {path}"})
-        try:
-            log_file = self.browser.find_latest_log(path) if path.is_dir() else path
-        except FileNotFoundError as e:
-            return JSONResponse(status_code=400, content={"error": str(e)})
-        series = self.loader.parse(log_file)
+        files = self.loader.session_files(path)  # 会话文件按时间戳合并成完整曲线
+        if not files:
+            return JSONResponse(status_code=400, content={"error": f"目录下未找到 .melog 日志: {path}"})
+        series = self.loader.parse(files)
         if not series:
             return JSONResponse(status_code=400, content={"error": "文件中没有可解析的指标"})
-        colors = self._read_colors(log_file)  # 该日志运行时的用户指定颜色（如有）
-        media = self._read_media(log_file)
+        run_dir = files[0].parent
+        colors = self._read_colors(run_dir)  # 该日志运行时的用户指定颜色（如有）
+        media = self._read_media(files)
         self.view.set_loaded(series, colors)
         if self.media_view is not None:
-            self.media_view.set_loaded(media, log_file.parent)
-        self.default_dir = str(log_file.parent)  # 默认浏览目录跟随当前展示日志
+            self.media_view.set_loaded(media, run_dir)
+        self.default_dir = str(run_dir)  # 默认浏览目录跟随当前展示日志
         await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
         await self.hub.broadcast({"type": "colors", "colors": colors})
         await self._broadcast_media_history()
-        return {"ok": True, "count": len(series), "path": str(log_file)}
+        return {"ok": True, "count": len(series), "path": str(files[0])}
 
     async def api_unload(self):
         """切回当前实时运行视图。"""
@@ -119,12 +119,12 @@ class ApiRoutes:
         await self._broadcast_media_history()
         return {"ok": True}
 
-    def _read_media(self, log_file: Path) -> dict:
+    def _read_media(self, files: list) -> dict:
         """解析日志中的媒体记录；无 MediaLoader 或解析失败时返回空。"""
-        if self.media_loader is None:
+        if self.media_loader is None or not files:
             return {}
         try:
-            return self.media_loader.parse(log_file)
+            return self.media_loader.parse(files)
         except OSError:
             return {}
 
@@ -134,9 +134,9 @@ class ApiRoutes:
         await self.hub.broadcast({"type": "media_history", "media": self.media_view.snapshot()})
 
     @staticmethod
-    def _read_colors(log_file: Path) -> dict:
-        """读取日志同目录的 colors.json（用户指定颜色），缺失或损坏时返回空。"""
-        path = log_file.parent / "colors.json"
+    def _read_colors(run_dir: Path) -> dict:
+        """读取 run 目录的 colors.json（用户指定颜色），缺失或损坏时返回空。"""
+        path = run_dir / "colors.json"
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}

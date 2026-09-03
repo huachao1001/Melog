@@ -33,7 +33,7 @@ class WebServer:
     - MediaView:   媒体展示视图（实时/历史切换 + 文件白名单解析）
     - WsHub:       WebSocket 客户端与广播
     - FileBrowser: 文件系统浏览
-    - LogLoader / MediaLoader: JSONL 解析（指标 / 媒体）
+    - LogLoader / MediaLoader: 二进制日志解析（指标 / 媒体，会话合并）
     - ApiRoutes:   路由注册
     """
 
@@ -95,6 +95,10 @@ class WebServer:
         """线程安全：更新用户指定颜色（指标名 -> CSS 颜色）并广播。"""
         self.view.set_colors(colors)
         self.hub.publish({"type": "colors", "colors": dict(colors)})
+
+    def broadcast_history(self) -> None:
+        """线程安全：向所有面板广播全量历史（续训截断重叠区后整体替换）。"""
+        self.hub.publish({"type": "history", "metrics": self.view.snapshot()})
 
     def publish_media(self, kind: str, name: str, step: int, epoch: Optional[int],
                       relpath: str, sr: Optional[int] = None,

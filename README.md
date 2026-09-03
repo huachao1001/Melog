@@ -11,7 +11,8 @@ epoch 3 loss=0.2153 acc=0.8974 lr=8.2e-04 ━━━━━━━━━━━─�
 - **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），`[n/total]` 领先、指标紧随其后实时刷新；进度条与 print 同步镜像到 console.log（进度条行 2 秒节流刷新）
 - **多 GPU 指标合并**：基于 `torch.distributed` all_reduce 跨进程聚合（默认取均值），仅 rank0 记录与展示；未装 torch 自动退化单进程
 - **Web 可视化**：FastAPI + WebSocket + ECharts，后台线程运行，实时推送曲线，断线自动重连
-- **持久化**：指标自动写入 JSONL，供离线分析
+- **持久化**：指标写入自研二进制容器（符号表 + varint 增量编码，体积约为 JSONL 的 1/4），每次启动一个带时间戳的会话文件，互不覆盖
+- **断点续训**：重跑同一 `log_dir` 自动接续历史曲线；从某个 epoch 重新训练时自动清除上次中断留下的重叠数据，折线不会在 x 轴上回退
 
 ## 安装
 
@@ -336,7 +337,7 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `log_dir` | `./melog_runs` | 日志保存路径；本次运行落在其下时间戳子目录，末级目录名即项目名 |
+| `log_dir` | `./melog_runs` | 日志保存路径（即 run 目录，日志直接落在其中）；重跑同一目录即断点续训 |
 | `web_port` | 随机空闲端口 | Web 监听端口（`web_host` 默认 `127.0.0.1`，地址启动时自动打印，也可读 `melog.current().web_url`） |
 | `enable_web` | `True` | 启动 Web 服务（仅 rank0） |
 | `enable_progress` | `True` | 启用控制台进度条 |
@@ -362,8 +363,8 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 安装后可直接用命令行查看历史日志，自动打开浏览器：
 
 ```bash
-melog F:/runs/exp1/metrics.melog   # 指定日志文件
-melog F:/runs/exp1                 # 指定目录（自动取最新 metrics.melog）
+melog F:/runs/exp1/metrics-20260903_101010.melog  # 指定会话日志（自动合并同目录全部会话）
+melog F:/runs/exp1                 # 指定 run 目录（合并其全部会话文件）
 melog                              # 缺省在 ./melog_runs 中查找
 melog F:/runs/exp1 --port 9000 --no-browser  # 自定义端口 / 不开浏览器
 ```
@@ -381,7 +382,8 @@ melog/
 │   ├── steps_bar.py # StepsBar：tqdm 风格训练进度条（epoch 绑定 + 自动记录）
 │   └── console.py   # Console：控制台消息（log/success/error/warn）+ print 拦截
 ├── storage/         # 持久化与产物
-│   ├── journal.py   # Journal：JSONL 日志落盘（批量写 + 即时追加）
+│   ├── journal.py   # Journal：二进制日志落盘（批量写 + 即时追加 + 截断）
+│   ├── melog_file.py  # MelogFile：melog 二进制容器（符号表 + varint 编码 / 读取 / 重叠截断）
 │   ├── media.py     # 图像/音频落盘编码（路径复制或数组编码）
 │   ├── media_log.py # MediaLog：媒体记录流程（定位->落盘->索引->日志->推送）
 │   └── mirror.py    # Mirror：控制台日志镜像（进度条就地刷新 + stdio 接管）
@@ -398,7 +400,7 @@ melog/
 │   ├── media_store.py  # MediaStore：实时媒体索引
 │   ├── media_view.py   # MediaView：媒体视图切换 + 文件白名单解析
 │   ├── fs.py        # FileBrowser：文件浏览
-│   ├── loader.py    # LogLoader / MediaLoader：JSONL 解析
+│   ├── loader.py    # LogLoader / MediaLoader：二进制日志解析与会话合并
 │   ├── ws.py        # WsHub：WebSocket 广播
 │   └── static/      # 前端（js 按类分模块）
 └── utils/           # 通用工具类

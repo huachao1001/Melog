@@ -28,7 +28,7 @@ def main():
             melog.scalar({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)})
             time.sleep(0.03)
 
-    print(f"指标已落盘: {melog.current().run_dir / 'metrics.melog'}")
+    print(f"指标已落盘: {melog.current().run_dir}")
 
 
 if __name__ == "__main__":

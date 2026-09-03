@@ -1,6 +1,5 @@
 """媒体记录测试：图像/音频落盘、媒体索引、视图解析与 Melog 接口。"""
 
-import json
 import wave
 
 import pytest
@@ -8,6 +7,7 @@ import pytest
 from melog import StepsBar
 from melog.core import Melog
 from melog.storage.media import read_wav_info, sanitize_name, save_audio, save_image
+from melog.storage.melog_file import MelogFileReader
 from melog.web.loader import LogLoader, MediaLoader
 from melog.web.media_store import MediaStore
 from melog.web.media_view import MediaView
@@ -156,18 +156,20 @@ def test_media_store_add_sort_dedupe_and_cap():
 
 # ---------------------------------------------------------------- 日志解析
 def test_loaders_split_metrics_and_media(tmp_path):
-    log = tmp_path / "metrics.melog"
-    log.write_text(
-        '{"metric": "loss", "step": 0, "value": 1.0, "epoch": 0}\n'
-        '{"type": "image", "metric": "pred", "step": 0, "epoch": 0, "file": "media/image/pred/000000000.png"}\n'
-        '{"type": "audio", "metric": "tone", "step": 5, "file": "media/audio/tone/000000005.wav", "sr": 16000}\n'
-        "坏行\n",
-        encoding="utf-8",
-    )
-    metrics = LogLoader.parse(log)
+    from melog.storage.melog_file import MelogFile
+
+    f = MelogFile(tmp_path / "metrics-1.melog")
+    f.add_batch([{"metric": "loss", "step": 0, "value": 1.0, "epoch": 0}])
+    f.append_media({"type": "image", "metric": "pred", "step": 0, "epoch": 0,
+                    "file": "media/image/pred/000000000.png"})
+    f.append_media({"type": "audio", "metric": "tone", "step": 5,
+                    "file": "media/audio/tone/000000005.wav", "sr": 16000})
+    f.close()
+
+    metrics = LogLoader.parse(tmp_path)
     assert metrics["loss"] == [(0, 1.0, 0)]  # 媒体记录不混入指标
 
-    media = MediaLoader.parse(log)
+    media = MediaLoader.parse(tmp_path)
     assert media["image"]["pred"] == [
         {"step": 0, "epoch": 0, "file": "media/image/pred/000000000.png"}
     ]
@@ -243,7 +245,7 @@ def test_media_attach_position_and_files(lg):
     assert (media_root / "image/sample/a/000000001.png").is_file()
     assert (media_root / "audio/sample/a/000000001.wav").is_file()
 
-    recs = [json.loads(l) for l in lg._log_file.read_text(encoding="utf-8").splitlines()]
+    recs = list(MelogFileReader(lg._log_file).media())
     img_rec = next(r for r in recs if r.get("type") == "image")
     aud_rec = next(r for r in recs if r.get("type") == "audio")
     assert img_rec == {"type": "image", "metric": "sample/a", "step": 1,
@@ -284,8 +286,8 @@ def test_media_caption_roundtrip(lg):
     lg.image("cap/img", np.ones((2, 2), dtype=np.uint8))
     lg.audio("cap/tone", np.zeros(10), sr=8000, caption="转写文本")
 
-    recs = [json.loads(l) for l in lg._log_file.read_text(encoding="utf-8").splitlines()]
-    media_recs = [r for r in recs if "type" in r]
+    recs = list(MelogFileReader(lg._log_file).media())
+    media_recs = recs
     assert media_recs[0]["caption"] == "第一张\n说明文字"
     assert "caption" not in media_recs[1]  # 无配文的条目不带该字段
     assert media_recs[2]["caption"] == "转写文本"

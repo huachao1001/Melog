@@ -40,8 +40,9 @@ def init(log_dir: str = "./melog_runs", web_port: Optional[int] = None, **kwargs
     melog.scalar() 等接口（需要实例本身时用 melog.current() 取回）。
 
     Args:
-        log_dir: 日志保存路径；本次运行的指标 / 媒体 / console.log 落在
-            其下的时间戳子目录中，路径末级目录名作为项目名展示。
+        log_dir: 日志保存路径（即 run 目录）：指标 / 媒体 / console.log
+            直接落在其中；重跑同一目录即断点续训（历史曲线接续，
+            重新训练的 epoch 自动覆盖上次中断的重叠数据）。
         web_port: Web 监听端口；缺省自动选择一个空闲端口。
         **kwargs: 其余高级参数（enable_web / enable_progress / reduce_op /
             flush_every / max_plot_points，以及 project 覆盖项目名等）。

@@ -62,15 +62,35 @@ def test_find_latest_log_none(tmp_path):
 
 # ---------------------------------------------------------------- LogLoader
 def test_loader_parse(tmp_path):
-    jl = tmp_path / "metrics.melog"
-    jl.write_text(
-        '{"metric": "loss", "step": 1, "value": 0.5}\n'
-        '{"metric": "loss", "step": 0, "value": 1.0}\n'  # 乱序
-        "坏行\n",
-        encoding="utf-8",
-    )
-    series = LogLoader.parse(jl)
-    assert series["loss"] == [(0, 1.0, None), (1, 0.5, None)]  # 按 step 排序；无 epoch 记 None
+    """二进制日志解析：乱序 step 排序；无 epoch 记 None；坏文件返回空。"""
+    from melog.storage.melog_file import MelogFile
+
+    f = MelogFile(tmp_path / "metrics-1.melog")
+    f.add_batch([{"metric": "loss", "step": 1, "value": 0.5}])
+    f.add_batch([{"metric": "loss", "step": 0, "value": 1.0}])
+    f.close()
+    (tmp_path / "broken.melog").write_bytes(b"\xc0\x01garbage")  # 非 melog 格式
+
+    series = LogLoader.parse(tmp_path)  # 目录：合并全部会话文件
+    assert series["loss"] == [(0, 1.0, None), (1, 0.5, None)]  # 按 step 排序
+    assert LogLoader.parse(tmp_path / "broken.melog") == {}
+
+
+def test_loader_merges_session_files(tmp_path):
+    """同目录多个时间戳会话文件按文件名序合并为完整时间线。"""
+    from melog.storage.melog_file import MelogFile
+
+    f1 = MelogFile(tmp_path / "metrics-20260903_101010.melog")
+    f1.add_batch([{"metric": "loss", "step": 0, "value": 1.0, "epoch": 0}])
+    f1.close()
+    f2 = MelogFile(tmp_path / "metrics-20260903_102020.melog")
+    f2.add_batch([{"metric": "loss", "step": 1, "value": 0.5, "epoch": 1}])
+    f2.close()
+
+    series = LogLoader.parse(tmp_path)
+    assert series["loss"] == [(0, 1.0, 0), (1, 0.5, 1)]
+    # 指定任一会话文件也合并同目录全部会话
+    assert LogLoader.parse(f2._path)["loss"] == [(0, 1.0, 0), (1, 0.5, 1)]
 
 
 # ---------------------------------------------------------------- MetricView

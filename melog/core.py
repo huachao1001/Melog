@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -20,12 +22,20 @@ from .distributed import get_rank, reduce_metrics
 from .media import sanitize_name, save_audio, save_image
 from .metrics import MetricGroup
 from .mirror import Mirror
-from .tqdm import tqdm
+from .tqdm import _is_tty, tqdm
 from .web.media_store import MediaStore
 from .web.server import WebServer
 from .web.store import MetricStore
 
 __all__ = ["Melog", "tqdm"]
+
+# 控制台消息色（SGR 标准色，随终端主题）；log 走终端默认色（黑字）
+_GREEN, _RED, _YELLOW = "\x1b[32m", "\x1b[31m", "\x1b[33m"
+_RESET = "\x1b[0m"
+
+# 被 print 拦截顶掉的原生 print，以及当前已拦截 print 的实例栈（finish 时还原）
+_ORIG_PRINT = None
+_PRINT_PATCHED: list = []
 
 
 class Melog:
@@ -103,6 +113,8 @@ class Melog:
         if self._is_primary:
             self.mirror = Mirror(self._run_dir / "console.log")
             self.mirror.hook_stdio()
+            # 拦截官方 print：用户代码里的 print(...) 内部改走 self.log()
+            self._patch_print()
         # 注册为全局活动实例（见 melog.current / 模块级 melog.log 等便捷接口）
         _set_active(self)
 
@@ -353,6 +365,63 @@ class Melog:
         if self._web is not None:
             self._web.set_colors(dict(self._colors))
 
+    # ------------------------------------------------------------------ 控制台消息
+    def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀。
+
+        实例存活期间官方 print 被拦截到本方法；多个参数自动转 str()
+        后以 sep 拼接。
+        """
+        self._emit("", "", values, sep, end, flush)
+
+    def success(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+        """绿色文字 + ✔ 前缀。"""
+        self._emit("✔", _GREEN, values, sep, end, flush)
+
+    def error(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+        """红色文字 + ✘ 前缀。"""
+        self._emit("✘", _RED, values, sep, end, flush)
+
+    def warn(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+        """黄色文字 + ⚠ 前缀。"""
+        self._emit("⚠", _YELLOW, values, sep, end, flush)
+
+    def _emit(self, icon: str, color: str, values: tuple, sep: str,
+              end: str, flush: bool) -> None:
+        """控制台消息统一出口：转 str、拼图标、按 TTY 着色，写入当前 stdout。"""
+        text = sep.join(str(v) for v in values)
+        line = f"{icon} {text}" if icon else text
+        stream = sys.stdout
+        if color and _is_tty(stream):
+            line = f"{color}{line}{_RESET}"
+        stream.write(line + end)
+        if flush:
+            stream.flush()
+
+    def _patch_print(self) -> None:
+        """拦截官方 print：用户代码的 print(...) 内部改走 self.log()。"""
+        global _ORIG_PRINT
+        if not _PRINT_PATCHED:
+            _ORIG_PRINT = builtins.print
+        _PRINT_PATCHED.append(self)
+        builtins.print = self._print_proxy
+
+    def _unpatch_print(self) -> None:
+        global _ORIG_PRINT
+        if self in _PRINT_PATCHED:
+            _PRINT_PATCHED.remove(self)
+        if not _PRINT_PATCHED and _ORIG_PRINT is not None:
+            builtins.print = _ORIG_PRINT
+            _ORIG_PRINT = None
+
+    def _print_proxy(self, *values: Any, sep: str = " ", end: str = "\n",
+                     flush: bool = False, file: Any = None) -> None:
+        """print 替身：file 显式指定时走原生 print，否则改道 log()。"""
+        if file is not None:
+            _ORIG_PRINT(*values, sep=sep, end=end, flush=flush, file=file)
+            return
+        self.log(*values, sep=sep, end=end, flush=flush)
+
     def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
         if self._web is not None:
             self._web.publish(step, metrics, epoch=epoch)
@@ -390,6 +459,7 @@ class Melog:
             self._progress.close()
             self._progress = None
         if self.mirror is not None:
+            self._unpatch_print()
             self.mirror.unhook_stdio()
             self.mirror.close()
             self.mirror = None
@@ -444,11 +514,31 @@ def scalar(
     metrics: Dict[str, Union[float, int, Any]],
     step: Optional[int] = None,
     epoch: Optional[int] = None,
-    advance: int = 1,
+    advance: int = 0,
     commit: bool = True,
 ) -> Dict[str, float]:
     """模块级便捷接口：等价于 ``current().scalar(...)``。"""
     return current().scalar(metrics, step=step, epoch=epoch, advance=advance, commit=commit)
+
+
+def log(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """模块级便捷接口：等价于 ``current().log(...)``。"""
+    current().log(*values, sep=sep, end=end, flush=flush)
+
+
+def success(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """模块级便捷接口：等价于 ``current().success(...)``。"""
+    current().success(*values, sep=sep, end=end, flush=flush)
+
+
+def error(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """模块级便捷接口：等价于 ``current().error(...)``。"""
+    current().error(*values, sep=sep, end=end, flush=flush)
+
+
+def warn(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """模块级便捷接口：等价于 ``current().warn(...)``。"""
+    current().warn(*values, sep=sep, end=end, flush=flush)
 
 
 def log_group(

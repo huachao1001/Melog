@@ -1,6 +1,8 @@
 ﻿"""Melog 核心单元测试。"""
 
+import builtins
 import json
+import sys
 import threading
 
 import pytest
@@ -15,6 +17,49 @@ def logger(tmp_path):
     lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
     yield lg
     lg.finish()
+
+
+def read_log(tmp_path) -> str:
+    return (tmp_path / "test").glob("**/console.log").__next__().read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------- 控制台消息
+def test_console_messages(tmp_path):
+    """log/success/error/warn：多参数转 str()、图标前缀、非 TTY 不着色。"""
+    saved = sys.stdout
+    lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
+    try:
+        lg.log("hello", {"k": 2}, 3)
+        lg.success("saved")
+        lg.error("boom")
+        lg.warn("careful")
+    finally:
+        lg.finish()
+    assert sys.stdout is saved
+    text = read_log(tmp_path)
+    assert "hello {'k': 2} 3\n" in text      # 多参数 + 对象 str()
+    assert "✔ saved\n" in text
+    assert "✘ boom\n" in text
+    assert "⚠ careful\n" in text
+    assert "\x1b[" not in text               # 非 TTY 无 ANSI
+
+
+def test_print_intercepted_to_log(tmp_path):
+    """官方 print 被拦截改走 log；finish 后还原；file 指定时走原生 print。"""
+    saved, orig_print = sys.stdout, builtins.print
+    lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
+    try:
+        assert builtins.print is not orig_print      # 已拦截
+        print("via print", 123)
+        print(end="")                                # end 透传
+        builtins.print("direct", file=sys.stderr)    # file 指定 → 原生 print
+        assert builtins.print is not orig_print
+    finally:
+        lg.finish()
+    assert builtins.print is orig_print              # 已还原
+    assert sys.stdout is saved
+    text = read_log(tmp_path)
+    assert "via print 123\n" in text
 
 
 # ---------------------------------------------------------------- MetricStore

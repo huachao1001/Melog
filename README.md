@@ -53,7 +53,7 @@ melog.finish()                          # 训练结束收尾
 ```
 
 - 最近一次创建的实例即全局活动实例（`melog.current()` 取回），`finish()` 后清空
-- 模块级 `scalar / log_group / image / audio / set_colors / finish` 与实例方法等价
+- 模块级 `scalar / log_group / image / audio / log / success / error / warn / set_colors / finish` 与实例方法等价
 - 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
 
 ## 曲线上体现 epoch
@@ -71,6 +71,24 @@ for epoch in range(epochs):
 - `epoch` 缺省时**粘滞沿用**上一次传入的值（整个 epoch 内只需传一次），从未传入则不记录 epoch
 - `step` 为**当前 epoch 内**的步数，缺省内部自增（每个 epoch 从 0 重新计步）；
   未启用 epoch 时 `step` 含义不变（全局步数，缺省自增）
+
+## 控制台消息
+
+print 风格的控制台输出接口：多参数自动转 `str()`、以 `sep` 拼接，签名对齐 `print`
+（支持 `sep` / `end` / `flush`）：
+
+```python
+logger.log("普通消息", {"k": 1})   # 终端默认色（黑字），无前缀
+logger.success("保存完成")         # 绿色 ✔
+logger.error("加载失败")           # 红色 ✘
+logger.warn("学习率过大")          # 黄色 ⚠
+
+melog.log("...")                   # 模块级同样可用（需先 init）
+```
+
+实例存活期间（仅 rank0），官方 `print(...)` 会被拦截内部改走 `log()`——普通打印
+自动带上图标/配色并同步进 console.log，`finish()` 后还原原生 print。颜色仅在真实
+终端（TTY）启用，重定向 / console.log 始终纯文本。
 
 ## 记录图像与音频
 
@@ -235,6 +253,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 - `scalar(metrics, step=None, epoch=None, advance=0)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
 - `image(name, data, step=None, epoch=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
 - `progress(iterable)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上
+- `log / success / error / warn` — print 风格控制台消息（图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）
 - `finish()` — 落盘并停止 Web 服务
 - 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.scalar(...)` 等可在任意位置直接调用（见上文）
 

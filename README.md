@@ -33,7 +33,7 @@ for step in logger.progress(range(1000)):     # tqdm 风格：自动推进，无
     loss = train_one_step()
     logger.scalar({"loss": loss, "lr": 1e-3})    # 记录 + 刷新进度条指标 + 推送 Web
 
-logger.finish()   # 落盘剩余指标并停止 Web 服务
+# 无需 finish()：进程退出时自动落盘、停 Web、还原 print
 ```
 
 训练期间浏览器打开启动时打印的 Web 地址（即 `logger.web_url`）查看实时曲线。
@@ -52,12 +52,14 @@ logger = melog.init(log_dir="runs/my-exp")   # 日志保存路径；端口缺省
 import melog
 melog.scalar({"loss": 0.5}, epoch=epoch, step=step)
 melog.image("sample", img)
-melog.finish()                          # 训练结束收尾
+# 收尾：进程退出时自动完成，无需调用
 ```
 
 - `log_dir` 末级目录名即项目名（`runs/my-exp` → 项目 `my-exp`），本次运行落在
   `runs/my-exp/<时间戳>/` 下；`project=` 可覆盖项目名
 - 最近一次创建的实例即全局活动实例（`melog.current()` 取回），`finish()` 后清空
+- 进程退出时经 atexit 自动收尾：落盘剩余指标、定稿进度条、停 Web、还原 print；
+  仅需提前收尾（如训练中途停 Web）时才显式调用 `finish()`
 - 模块级 `scalar / log_group / image / audio / log / success / error / warn / set_colors / finish` 与实例方法等价
 - 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
 
@@ -260,7 +262,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 - `image(name, data, step=None, epoch=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
 - `progress(iterable)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上
 - `log / success / error / warn` — print 风格控制台消息（图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）
-- `finish()` — 落盘并停止 Web 服务
+- `finish()` — 可选：进程退出时经 atexit 自动收尾；仅训练中途需要提前收尾（如停 Web）时显式调用
 - 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.scalar(...)` 等可在任意位置直接调用（见上文）
 
 进度条显示的指标可通过环境变量 `MELOG_DISABLE_PROGRESS=1` 全局关闭。

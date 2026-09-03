@@ -61,7 +61,6 @@ def main():
         # epoch 末：所有 rank 统一调用，得到全局一致结果；记录后重置
         logger.log_group(metrics, reset=True)
 
-    logger.finish()
     if rank == 0:
         print(f"指标已落盘: {logger.run_dir / 'metrics.melog'}")
 

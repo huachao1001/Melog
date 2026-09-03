@@ -32,9 +32,7 @@ def main():
             })
             time.sleep(INTERVAL)
     except KeyboardInterrupt:
-        print("\n手动停止")
-    finally:
-        logger.finish()
+        print("\n手动停止")  # 进程退出时自动收尾（atexit）
 
 
 if __name__ == "__main__":

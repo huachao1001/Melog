@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import atexit
 import builtins
 import json
 import os
@@ -128,6 +129,9 @@ class Melog:
             self.log(f"Web 可视化: {self._web.url}")
         # 注册为全局活动实例（见 melog.current / 模块级 melog.log 等便捷接口）
         _set_active(self)
+        # 进程退出时自动收尾（落盘剩余指标 / 定稿进度条 / 停 Web / 还原 print），
+        # 无需显式调用 finish()
+        atexit.register(self.finish)
 
     # ------------------------------------------------------------------ 运行目录
     def _prepare_run_dir(self, output_dir: Optional[str]) -> Path:
@@ -464,11 +468,14 @@ class Melog:
     def finish(self) -> None:
         """落盘剩余指标，定稿进度条与日志镜像，停止 Web 服务。
 
-        若本实例是全局活动实例（见 melog.current），收尾后一并清空。
+        进程退出时经 atexit 自动调用，通常无需显式调用；仅在需要提前
+        收尾（如训练中途停掉 Web）时手动执行。若本实例是全局活动实例
+        （见 melog.current），收尾后一并清空。
         """
         if self._closed:
             return
         self._closed = True
+        atexit.unregister(self.finish)
         if self._is_primary:
             self._flush()
         if self._progress is not None:

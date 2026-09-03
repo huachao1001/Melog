@@ -27,7 +27,6 @@ def main():
             logger.scalar({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)}, epoch=epoch)
             time.sleep(0.03)
 
-    logger.finish()
     print(f"指标已落盘: {logger.run_dir / 'metrics.melog'}")
 
 

@@ -74,7 +74,6 @@ def main():
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")
-        logger.finish()
         return
 
     # 保持 Web 服务运行，方便在浏览器里拖滑杆回放图像/音频；历史查看也可用: melog <run_dir>
@@ -82,8 +81,7 @@ def main():
     try:
         input()
     except (EOFError, KeyboardInterrupt):
-        pass
-    logger.finish()
+        pass  # 进程退出时自动收尾（atexit）
 
 
 if __name__ == "__main__":

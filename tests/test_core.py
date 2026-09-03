@@ -24,6 +24,18 @@ def read_log(tmp_path) -> str:
 
 
 # ---------------------------------------------------------------- 控制台消息
+def test_atexit_auto_finish_registered(tmp_path, monkeypatch):
+    """实例创建即注册 atexit 自动收尾，finish 后注销且重复调用安全。"""
+    import atexit
+
+    registered = []
+    monkeypatch.setattr(atexit, "register", lambda f: registered.append(f))
+    lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
+    assert registered == [lg.finish]
+    lg.finish()
+    lg.finish()  # 幂等
+
+
 def test_console_messages(tmp_path):
     """log/success/error/warn：多参数转 str()、图标前缀、非 TTY 不着色。"""
     saved = sys.stdout

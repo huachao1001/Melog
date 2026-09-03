@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 from ..utils.distributed import gather_object
 from .base import BatchMetric, Metric
+from .basic import Mean
 
 __all__ = ["MetricGroup"]
 
@@ -25,12 +26,20 @@ class MetricGroup:
         # 不用 StepsBar 时手动落盘一次 + 开启新一轮统计
         melog.scalar(metrics)
         metrics.reset()
+
+    配合 StepsBar(metrics=...) 使用时，StepsBar 每次迭代自动从批次数据
+    识别样本数（批次大小），Mean 按它精确平均，feed 无需传元组；识别
+    失败（如迭代 range）回退等权平均并警告一次。显式传 (值, 观测数)
+    元组时以显式值优先。
     """
 
     def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
         self._metrics: Dict[str, Metric] = dict(metrics or {})
         # 每次 feed() 后触发的回调（由 StepsBar 挂载，用于进度条实时显示本地值）
         self._on_feed: Optional[Callable[[], None]] = None
+        # StepsBar 每次迭代自动注入的当前批次样本数（None = 未知，等权）
+        self._batch_count: Optional[float] = None
+        self._count_warned = False  # 识别失败仅警告一次
 
     def add(self, name: str, metric: Metric) -> "MetricGroup":
         if name in self._metrics:
@@ -49,9 +58,12 @@ class MetricGroup:
                   形参多时更可读）
                 组内没有单批次指标时可不传。
             **batch: 标量指标（Mean / Sum / Last / Count）的观测，按
-                注册名取同名键（带观测数传元组，如 loss=(3.2, batch_size)）；
-                没有同名键就跳过（不累积也不报错）。
+                注册名取同名键。Mean 的观测数自动取 StepsBar 识别的
+                批次样本数（识别失败等权）；需手动指定时传元组
+                (值, 观测数)，如 loss=(3.2, batch_size)。没有同名键
+                就跳过（不累积也不报错）。
         """
+        count = self._batch_count
         for name, metric in self._metrics.items():
             if isinstance(metric, BatchMetric):
                 if isinstance(args, dict):
@@ -62,6 +74,8 @@ class MetricGroup:
                 value = batch[name]
                 if isinstance(value, tuple):
                     metric.feed(*value)
+                elif isinstance(metric, Mean) and count:
+                    metric.feed(value, count)
                 else:
                     metric.feed(value)
         if self._on_feed is not None:
@@ -92,6 +106,7 @@ class MetricGroup:
         """重置组内全部指标，开启新一轮统计。"""
         for metric in self._metrics.values():
             metric.reset()
+        self._batch_count = None  # 丢弃上一轮遗留的批次样本数
 
     def __getitem__(self, name: str) -> Metric:
         return self._metrics[name]

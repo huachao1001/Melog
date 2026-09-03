@@ -318,6 +318,54 @@ def test_stepsbar_metrics_type_check(lg):
         StepsBar(range(3), metrics={"m": 1.0})
 
 
+# -------------------------------------------------------------- 批次样本数自动识别
+def test_detect_count_various_batch_formats():
+    from melog.tracking.steps_bar import _detect_count
+
+    assert _detect_count([1.0, 2.0, 3.0]) == 3.0        # 标量列表：长度即样本数
+    assert _detect_count(([1.0, 2.0], [1, 2])) == 2.0   # (x, y)：取第一个元素的样本数
+    assert _detect_count({"x": [1.0], "y": [0.0]}) == 1.0  # 字典：递归取值
+    assert _detect_count(5) is None
+    assert _detect_count(range(3)) is None
+
+
+def test_stepsbar_auto_batch_count(lg):
+    """StepsBar 自动识别批次样本数注入指标组：Mean 按它精确平均，feed 无需元组。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"m": Mean()})
+    batches = [{"x": [1.0, 2.0, 3.0]}, {"x": [4.0]}]  # 3 样本 + 1 样本
+    vals = iter([1.0, 2.0])
+    for _ in StepsBar(batches, epoch=0, metrics=group):
+        group.feed(m=next(vals))
+    # 等权应为 1.5；按样本数加权 = (1*3 + 2*1) / 4
+    assert lg.store.snapshot()["m"][0]["value"] == pytest.approx(1.25)
+
+
+def test_stepsbar_count_fallback_equal_weight(lg):
+    """批次无法识别样本数（如 range）：回退等权平均，仅警告一次。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"m": Mean()})
+    for e in range(2):
+        for _ in StepsBar(range(2), epoch=e, metrics=group):
+            group.feed(m=float(e + 1))
+    snap = lg.store.snapshot()["m"]
+    assert [r["value"] for r in snap] == [1.0, 2.0]  # 等权
+    assert group._count_warned  # 两个 epoch 只警告一次
+
+
+def test_stepsbar_explicit_tuple_overrides_auto_count(lg):
+    """显式 (值, 观测数) 元组优先于自动识别的批次样本数。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"m": Mean()})
+    batches = [{"x": [1.0, 2.0, 3.0]}]  # 自动识别为 3
+    for _ in StepsBar(batches, epoch=0, metrics=group):
+        group.feed(m=(5.0, 2.0))  # 显式传 2
+    assert lg.store.snapshot()["m"][0]["value"] == pytest.approx(5.0)
+
+
 def test_stepsbar_realtime_postfix(lg):
     """StepsBar(metrics=...)：每次 feed 后 postfix 实时刷新为本卡本地值（零通信）。"""
     from melog.metrics import Mean, MetricGroup

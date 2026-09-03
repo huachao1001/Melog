@@ -63,9 +63,10 @@ class ScalarMetric(Metric):
 class Mean(ScalarMetric):
     """按观测数加权的平均。feed(value, count=1.0)：结果 = sum(value * count) / sum(count)。
 
-    常规训练无需传 count（各 batch 等权平均）；各 batch 样本数不均、
-    需要按样本/token 精确平均时才传 count（经 MetricGroup 喂入时
-    传元组 (值, count)，如 loss=(loss, token_num)）。
+    配合 StepsBar(metrics=...) 时 count 自动取识别到的批次样本数，
+    常规训练直接 feed(value) 即可；识别失败（如迭代 range）等权平均。
+    手动指定时传 count：单独使用直接 feed(value, count)，经 MetricGroup
+    喂入时传元组 (值, 观测数)，如 loss=(loss, token_num)。
 
     多 GPU 下自动按各 rank 的 count 之和合并，等价于全局样本加权平均，
     而非"各卡平均值的平均"。

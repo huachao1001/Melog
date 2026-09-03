@@ -147,9 +147,12 @@ for epoch in range(epochs):
     for _ in StepsBar(range(steps), epoch=epoch, metrics=metrics):
         metrics.feed(loss=loss, acc=acc, seen=batch_size, lr=lr)  # 仅累积观测（内存），尚无输出
 ```
-- 默认各 batch **等权平均**，无需传 batch_size；多 GPU 下合并为全局等权平均，而非"各卡平均值的平均"
-- 各 batch 样本数不均（如最后一个不满 batch）、需要按样本 / token 精确加权时，
-  传**元组** `(值, 观测数)`：`metrics.feed(loss=(loss, token_num))`
+- `Mean` 默认按 StepsBar 自动识别的**批次样本数**精确平均（feed 无需传
+  batch_size；各 batch 等样本数时即等权）；多 GPU 下合并为全局样本平均，
+  而非"各卡平均值的平均"
+- 批次样本数自动识别（tensor / numpy 的 shape[0]、字典、列表 / 元组递归）；
+  识别失败（如迭代 range）回退等权平均并警告一次。需手动指定时传**元组**
+  `(值, 观测数)`：`metrics.feed(loss=(loss, token_num))`，显式值优先
 - `melog.scalar(metrics)` 随时可落盘当前累计值；**必须算完一个 epoch 才有意义的指标**，
   在 epoch 末统一记录一次即可（交给 StepsBar 自动执行，或手动调用）
 - 跨 GPU 合并是集合操作：**所有 rank 必须以相同顺序执行**，返回值各 rank 一致；单进程自动直通

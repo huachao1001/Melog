@@ -41,10 +41,10 @@ class TrainProgress:
     """训练进度条上下文管理器。
 
     用法：
-        with logger.train(total=steps) as bar:
+        with mlog.train(total=steps) as bar:
             for step in range(steps):
                 ...
-                logger.log({"loss": loss})
+                mlog.log({"loss": loss})
                 bar.advance(1)
     """
 

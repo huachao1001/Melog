@@ -23,10 +23,10 @@ EPOCHS = 3
 
 def main():
     rank = get_rank()
-    logger = Melog(project="demo-multi", web_port=8666)
+    mlog = Melog(project="demo-multi", web_port=8666)
 
     if rank == 0:
-        ws = f", Web: {logger._web.url}" if logger._web else ""
+        ws = f", Web: {mlog._web.url}" if mlog._web else ""
         print(f"world_size={get_world_size()} 分布式={is_distributed()}{ws}")
 
     metrics = MetricGroup(
@@ -39,7 +39,7 @@ def main():
         }
     )
 
-    with logger.train(total=STEPS, description=f"rank{rank}") as bar:
+    with mlog.train(total=STEPS, description=f"rank{rank}") as bar:
         for epoch in range(EPOCHS):
             for step in range(STEPS):
                 # 模拟各 GPU 有差异的本地观测
@@ -60,11 +60,11 @@ def main():
                 time.sleep(0.02)
 
             # epoch 末：所有 rank 统一调用，得到全局一致结果；记录后重置
-            logger.log_group(metrics, reset=True)
+            mlog.log_group(metrics, reset=True)
 
-    logger.finish()
+    mlog.finish()
     if rank == 0:
-        print(f"指标已落盘: {logger.run_dir / 'metrics.melog'}")
+        print(f"指标已落盘: {mlog.run_dir / 'metrics.melog'}")
 
 
 if __name__ == "__main__":

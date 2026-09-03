@@ -25,15 +25,15 @@ pip install -e ".[torch]"   # 多 GPU 合并需要 torch
 ```python
 from melog import Melog
 
-logger = Melog(project="my-exp", web_port=8666)
+mlog = Melog(project="my-exp", web_port=8666)
 
-with logger.train(total=1000) as bar:
+with mlog.train(total=1000) as bar:
     for step in range(1000):
         loss = train_one_step()
-        logger.log({"loss": loss, "lr": 1e-3})   # 记录 + 更新进度条 + 推送 Web
+        mlog.log({"loss": loss, "lr": 1e-3})   # 记录 + 更新进度条 + 推送 Web
         bar.advance(1)
 
-logger.finish()   # 落盘剩余指标并停止 Web 服务
+mlog.finish()   # 落盘剩余指标并停止 Web 服务
 ```
 
 训练期间浏览器打开 `http://127.0.0.1:8666` 查看实时曲线。
@@ -47,7 +47,7 @@ logger.finish()   # 落盘剩余指标并停止 Web 服务
 ```python
 for epoch in range(epochs):
     for step in range(steps):
-        logger.log({"loss": loss, "lr": lr}, epoch=epoch, step=step)
+        mlog.log({"loss": loss, "lr": lr}, epoch=epoch, step=step)
 ```
 
 - `epoch` 缺省时**粘滞沿用**上一次传入的值（整个 epoch 内只需传一次），从未传入则不记录 epoch
@@ -62,9 +62,9 @@ for epoch in range(epochs):
 媒体一并恢复：
 
 ```python
-logger.log({"loss": loss}, epoch=epoch, step=step)
-logger.log_image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
-logger.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
+mlog.log({"loss": loss}, epoch=epoch, step=step)
+mlog.log_image("train/sample", img)        # 路径 / PIL / numpy / torch，附着当前 step
+mlog.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
 ```
 
 - `step` / `epoch` 缺省时自动附着到**最近一次 `log()` 的位置**，不推进 step 计数
@@ -82,7 +82,7 @@ logger.log_audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / tor
 ```python
 from melog import Melog, Mean, Max, MetricGroup, Sum
 
-logger = Melog(project="my-exp")
+mlog = Melog(project="my-exp")
 metrics = MetricGroup({
     "loss": Mean(),      # 加权平均：update(loss, batch_size)
     "acc": Mean(),
@@ -91,19 +91,19 @@ metrics = MetricGroup({
     "lr": Mean(),        # 取最近值
 })
 
-with logger.train(total=steps * epochs) as bar:
+with mlog.train(total=steps * epochs) as bar:
     for epoch in range(epochs):
         for _ in range(steps):
             metrics.update(loss=(loss, batch_size), acc=(acc, batch_size),
                            seen=batch_size, best_acc=acc, lr=lr)
             bar.advance(1)
-        logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
+        mlog.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
 ```
 
 - `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
 - `Mean` / `Sum` / `Max` / `Min` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
 - `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
-- `logger.log_group(group, reset=True)` 等价于 `logger.log(group.compute()); group.reset()`
+- `mlog.log_group(group, reset=True)` 等价于 `mlog.log(group.compute()); group.reset()`
 
 ### 分类指标
 
@@ -123,7 +123,7 @@ metrics = MetricGroup({
 for logits, labels in val_loader:
     # feed：框架按各指标的形参名/注册名自动分发，无需逐个传 (logits, labels)
     metrics.feed(logits=logits, labels=labels, loss=(loss, batch_size))
-logger.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
+mlog.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
 ```
 
 - `Accuracy(topk=k)`：真实类别在前 k 个预测中即算正确
@@ -159,7 +159,7 @@ metric.update(logits=logits, labels=labels, mask=mask)
 ```python
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 metrics.feed(logits=logits, labels=labels, mask=mask, loss=(loss, batch_size))
-logger.log_group(metrics, reset=True)
+mlog.log_group(metrics, reset=True)
 ```
 
 **epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），

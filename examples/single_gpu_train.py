@@ -14,10 +14,10 @@ STEPS = 50
 
 
 def main():
-    logger = Melog(project="demo-single", web_port=8666)
-    print(f"Web 可视化: {logger._web.url if logger._web else '未启用'}")
+    mlog = Melog(project="demo-single", web_port=8666)
+    print(f"Web 可视化: {mlog._web.url if mlog._web else '未启用'}")
 
-    with logger.train(total=EPOCHS * STEPS, description="demo") as bar:
+    with mlog.train(total=EPOCHS * STEPS, description="demo") as bar:
         for epoch in range(EPOCHS):
             for step in range(STEPS):
                 g = epoch * STEPS + step
@@ -26,13 +26,13 @@ def main():
                 acc = 1 - loss / 2.1
                 # 传入 epoch + 当前 epoch 的 step，曲线上标注 epoch 分界；
                 # 都不传时内部自动统计 step
-                logger.log({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)},
+                mlog.log({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)},
                            epoch=epoch, step=step)
                 bar.advance(1)
                 time.sleep(0.03)
 
-    logger.finish()
-    print(f"指标已落盘: {logger.run_dir / 'metrics.melog'}")
+    mlog.finish()
+    print(f"指标已落盘: {mlog.run_dir / 'metrics.melog'}")
 
 
 if __name__ == "__main__":

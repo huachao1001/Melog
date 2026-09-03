@@ -32,11 +32,11 @@ class Melog:
 
     用法：
         >>> from melog import Melog
-        >>> logger = Melog(project="demo", enable_web=True)
-        >>> with logger.train(total=100) as bar:
+        >>> mlog = Melog(project="demo", enable_web=True)
+        >>> with mlog.train(total=100) as bar:
         ...     for step in range(100):
         ...         loss = 1.0 / (step + 1)
-        ...         logger.log({"loss": loss, "lr": 1e-3})
+        ...         mlog.log({"loss": loss, "lr": 1e-3})
         ...         bar.advance(1)
     """
 

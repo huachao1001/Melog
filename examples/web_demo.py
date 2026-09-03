@@ -16,17 +16,17 @@ INTERVAL = 0.5     # 每 0.5s 推送一次
 
 
 def main():
-    logger = Melog(project="web-demo", web_port=8666)
-    url = logger._web.url if logger._web else "未启用"
+    mlog = Melog(project="web-demo", web_port=8666)
+    url = mlog._web.url if mlog._web else "未启用"
     print(f"Web 可视化: {url} （浏览器打开查看实时曲线，Ctrl+C 退出）")
 
     try:
-        with logger.train(total=STEPS, description="web-demo") as bar:
+        with mlog.train(total=STEPS, description="web-demo") as bar:
             for step in range(STEPS):
                 loss = 2.0 * math.exp(-step / 150) + 0.05 + 0.02 * math.sin(step / 11) + random.uniform(-0.01, 0.01)
                 acc = min(0.99, 1 - loss / 2.1 + random.uniform(-0.005, 0.005))
                 grad_norm = 1.0 * math.exp(-step / 300) + random.uniform(0, 0.2)
-                logger.log({
+                mlog.log({
                     "loss": loss,
                     "acc": acc,
                     "lr": 1e-3 * (0.995 ** step),
@@ -37,7 +37,7 @@ def main():
     except KeyboardInterrupt:
         print("\n手动停止")
     finally:
-        logger.finish()
+        mlog.finish()
 
 
 if __name__ == "__main__":

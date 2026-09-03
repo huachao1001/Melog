@@ -21,7 +21,7 @@ class MetricGroup:
         metrics.feed(logits=logits, labels=labels, loss=loss, n=1)
 
         # epoch 末：一次同步合并全部，返回全局结果，可直接记录
-        logger.log(metrics.compute())
+        mlog.log(metrics.compute())
         metrics.reset()   # 开启下一轮统计
     """
 
@@ -68,7 +68,7 @@ class MetricGroup:
         """同步合并组内全部指标并返回全局结果。
 
         所有 rank 必须以相同顺序调用（一次 all_gather 完成全部同步），
-        返回值在各 rank 上一致，可直接交给 logger.log()。
+        返回值在各 rank 上一致，可直接交给 mlog.log()。
         """
         names = list(self._metrics)
         states = gather_object([self._metrics[name].state() for name in names])

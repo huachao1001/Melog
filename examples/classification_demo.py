@@ -55,10 +55,10 @@ def simulate_batch(step, rng):
 
 def main():
     rng = random.Random(7)
-    logger = Melog(project="demo-multiclass", web_port=8666)
+    mlog = Melog(project="demo-multiclass", web_port=8666)
     # 可选：为个别指标固定颜色（覆盖自动配色，其余仍按名称 hash 分配）
-    logger.set_colors({"recall/class_2": "#ef4444", "recall/class_3": "#94a3b8"})
-    url = logger._web.url if logger._web else "未启用"
+    mlog.set_colors({"recall/class_2": "#ef4444", "recall/class_3": "#94a3b8"})
+    url = mlog._web.url if mlog._web else "未启用"
     print(f"Web 可视化: {url} （重点看 recall / f1 / auc 三张多系列卡片，Ctrl+C 退出）")
 
     metrics = MetricGroup(
@@ -72,7 +72,7 @@ def main():
     )
 
     try:
-        with logger.train(total=EPOCHS * STEPS, description="multiclass-demo") as bar:
+        with mlog.train(total=EPOCHS * STEPS, description="multiclass-demo") as bar:
             for epoch in range(EPOCHS):
                 for step in range(STEPS):
                     g = epoch * STEPS + step  # 全局步数：模型能力按它增长
@@ -84,7 +84,7 @@ def main():
                         # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
                         # 传入 epoch + 当前 epoch 的 step：曲线上标注 epoch 分界；
                         # 都不传则内部自动统计 step
-                        logger.log({k: v for k, v in out.items() if v == v},
+                        mlog.log({k: v for k, v in out.items() if v == v},
                                    epoch=epoch, step=step, advance=LOG_EVERY)
                         metrics.reset()
                     bar.advance(1)
@@ -92,7 +92,7 @@ def main():
     except KeyboardInterrupt:
         print("\n手动停止")
     finally:
-        logger.finish()
+        mlog.finish()
 
 
 if __name__ == "__main__":

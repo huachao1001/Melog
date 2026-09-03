@@ -290,15 +290,9 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 
 ## 多 GPU
 
-代码无需修改，用 `torchrun` 启动即可：
-
-```bash
-torchrun --nproc_per_node=4 examples/multi_gpu_train.py
-```
-
-代码无需修改：每个 rank 进程各自跑同一份 melog 代码，`melog.init` 后
-库自动感知分布式环境（未装 torch 或单进程运行则一切退化为本地直通，
-行为完全一致）。
+代码无需修改，用 `torchrun` 启动即可：每个 rank 进程各自跑同一份 melog
+代码，`melog.init` 后库自动感知分布式环境（未装 torch 或单进程运行则
+一切退化为本地直通，行为完全一致）。
 
 自定义 `Metric` 时**多卡对你透明，不需要写任何分布式代码**：
 

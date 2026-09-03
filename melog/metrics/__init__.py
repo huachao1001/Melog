@@ -1,6 +1,6 @@
 """指标计算与跨 GPU 同步。
 
-- 基础指标：Mean / Sum / Max / Min / Last / Count
+- 基础指标：Mean / Sum / Last / Count
 - 分类指标：Accuracy / Precision / Recall / F1 / ConfusionMatrix，
   继承 BatchMetric，框架自动传入 logits 与 labels 并完成累积合并
 - 自定义单批次指标：继承 BatchMetric 只实现 compute_batch() 一个函数，
@@ -12,7 +12,7 @@
 """
 
 from .base import BatchMetric, Metric
-from .basic import Count, Last, Max, Mean, Min, ScalarMetric, Sum
+from .basic import Count, Last, Mean, ScalarMetric, Sum
 from .classification import (
     Accuracy,
     AUC,
@@ -30,8 +30,6 @@ __all__ = [
     "ScalarMetric",
     "Mean",
     "Sum",
-    "Max",
-    "Min",
     "Last",
     "Count",
     "Accuracy",

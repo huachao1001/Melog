@@ -12,11 +12,9 @@ from melog.metrics import (
     BatchMetric,
     Count,
     Last,
-    Max,
     Mean,
     Metric,
     MetricGroup,
-    Min,
     Sum,
 )
 
@@ -40,21 +38,15 @@ def test_mean_empty_is_nan():
     assert Mean().compute() != Mean().compute()  # NaN
 
 
-def test_sum_max_min_last_count():
+def test_sum_last_count():
     s = Sum()
-    mx = Max()
-    mn = Min()
     last = Last()
     cnt = Count()
     for v in (3.0, 1.0, 2.0):
         s.update(v)
-        mx.update(v)
-        mn.update(v)
         last.update(v)
         cnt.update()
     assert s.compute() == pytest.approx(6.0)
-    assert mx.compute() == pytest.approx(3.0)
-    assert mn.compute() == pytest.approx(1.0)
     assert last.compute() == pytest.approx(2.0)
     assert cnt.compute() == pytest.approx(3.0)
 
@@ -277,46 +269,13 @@ def test_group_update_dispatch():
     assert out["n"] == pytest.approx(2.0)
 
 
-def test_group_weight_dispatch():
-    """组级 weight 一次喂给所有 Mean；Count/Sum 等不受影响。"""
-    group = MetricGroup({"loss": Mean(), "acc": Mean(), "seen": Count(), "total": Sum()})
-    group.update(loss=2.0, acc=0.5, seen=4, total=10, weight=4)
+def test_group_tuple_weight_dispatch():
+    """元组 (值, 权重) 按指标精确加权，其余指标等权。"""
+    group = MetricGroup({"loss": Mean(), "acc": Mean()})
+    group.update(loss=(2.0, 4), acc=0.5)
     out = group.compute()
     assert out["loss"] == pytest.approx(2.0)   # sum=8, weight=4
     assert out["acc"] == pytest.approx(0.5)
-    assert out["seen"] == pytest.approx(4.0)
-    assert out["total"] == pytest.approx(10.0)
-
-
-def test_group_weight_accumulates():
-    """组级权重跨 batch 累积，等价于逐个传元组。"""
-    group = MetricGroup({"loss": Mean()})
-    group.update(loss=2.0, weight=2)
-    group.update(loss=4.0, weight=1)
-    assert group.compute()["loss"] == pytest.approx((2 * 2 + 4 * 1) / 3)
-
-
-def test_group_weight_tuple_override():
-    """显式元组优先于组级权重。"""
-    group = MetricGroup({"loss": Mean()})
-    group.update(loss=(3.0, 1), weight=10)
-    assert group.compute()["loss"] == pytest.approx(3.0)
-
-
-def test_group_named_weight_metric_backward_compat():
-    """组内注册了名为 weight 的指标时，weight= 退回普通分发（旧语义）。"""
-    group = MetricGroup({"loss": Mean(), "weight": Count()})
-    group.update(loss=2.0, weight=4)
-    out = group.compute()
-    assert out["weight"] == pytest.approx(4.0)
-    assert out["loss"] == pytest.approx(2.0)   # 未加权
-
-
-def test_group_feed_weight_dispatch():
-    """feed 同样支持组级权重。"""
-    group = MetricGroup({"loss": Mean()})
-    group.feed(loss=2.0, weight=4)
-    assert group.compute()["loss"] == pytest.approx(2.0)
 
 
 def test_group_unknown_metric():

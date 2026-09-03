@@ -5,9 +5,9 @@
 未安装 torch 时自动退化为单进程，行为与单 GPU 示例一致。
 
 指标分三类：
-- loss / acc：加权平均（按 batch_size 加权，跨 GPU 自动合并）
+- loss / acc：各 batch 等权平均（跨 GPU 自动合并）
 - seen：样本数求和
-- best_acc：历史最大值
+- lr：最近一次喂入值
 """
 
 import math
@@ -15,7 +15,7 @@ import os
 import time
 
 import melog
-from melog import Mean, Max, MetricGroup, Sum
+from melog import Last, Mean, MetricGroup, Sum
 from melog.distributed import get_rank, get_world_size, is_distributed
 
 STEPS = 200
@@ -32,31 +32,26 @@ def main():
 
     metrics = MetricGroup(
         {
-            "loss": Mean(),      # 加权平均
-            "acc": Mean(),       # 加权平均
-            "seen": Sum(),       # 求和
-            "best_acc": Max(),   # 历史最大
-            "lr": Mean(),        # Last 亦可：多卡时取 rank0 的值
+            "loss": Mean(),   # 各 batch 等权平均
+            "acc": Mean(),
+            "seen": Sum(),    # 求和
+            "lr": Last(),     # 最近一次喂入值
         }
     )
 
     for epoch in range(EPOCHS):
-        for step in logger.progress(range(STEPS)):
+        for step in logger.progress(range(STEPS), epoch=epoch):
             # 模拟各 GPU 有差异的本地观测
             base = 2.0 * math.exp(-step / 60) + 0.05
             local_loss = base + 0.01 * (rank + 1) * math.sin(step / 9 + rank)
             local_acc = 1 - local_loss / 2.1
-            batch_size = 16 + step % 8
 
-            # 只需累积本地值；跨 GPU 合并在 compute() 内自动完成。
-            # weight=batch_size 一次喂给所有 Mean（等价于逐个传元组）
+            # 只需累积本地值；跨 GPU 合并在 compute() 内自动完成
             metrics.update(
                 loss=local_loss,
                 acc=local_acc,
-                seen=batch_size,
-                best_acc=local_acc,
+                seen=16 + step % 8,
                 lr=1e-3 * (0.98 ** (epoch * STEPS + step)),
-                weight=batch_size,
             )
             time.sleep(0.02)
 

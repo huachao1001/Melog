@@ -1,4 +1,4 @@
-"""内置标量指标：平均 / 求和 / 极值 / 最近值 / 计数。
+"""内置标量指标：平均 / 求和 / 最近值 / 计数。
 
 标量累积型指标的状态是一组命名数值，跨 GPU 合并方式由 _ops 声明，
 子类只需实现 update()，无需接触任何分布式代码。
@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 
 from .base import Metric, _to_float
 
-__all__ = ["ScalarMetric", "Mean", "Sum", "Max", "Min", "Last", "Count"]
+__all__ = ["ScalarMetric", "Mean", "Sum", "Last", "Count"]
 
 
 class ScalarMetric(Metric):
@@ -61,10 +61,11 @@ class ScalarMetric(Metric):
 
 
 class Mean(ScalarMetric):
-    """加权平均。update(value, weight=1.0)，weight 常传 batch_size。
+    """加权平均。update(value, weight=1.0)。
 
-    经 MetricGroup 使用时可传组级权重 weight=batch_size（一次即可），
-    组内所有 Mean 自动加权，无需逐个传元组。
+    常规训练无需传 weight（各 batch 等权平均）；各 batch 样本数不均、
+    需要按样本/token 精确加权时才传 weight（经 MetricGroup 喂入时
+    传元组 (值, 权重)，如 loss=(loss, token_num)）。
 
     多 GPU 下自动按各 rank 的权重和合并，等价于全局样本加权平均，
     而非"各卡平均值的平均"。
@@ -91,32 +92,6 @@ class Sum(ScalarMetric):
 
     def _finalize(self, merged: Dict[str, float]) -> float:
         return merged["total"]
-
-
-class Max(ScalarMetric):
-    """最大值。update(value)。"""
-
-    _ops = {"m": "max"}
-    _init = {"m": float("-inf")}
-
-    def update(self, value: Any) -> None:
-        self._acc["m"] = max(self._acc["m"], _to_float(value))
-
-    def _finalize(self, merged: Dict[str, float]) -> float:
-        return merged["m"]
-
-
-class Min(ScalarMetric):
-    """最小值。update(value)。"""
-
-    _ops = {"m": "min"}
-    _init = {"m": float("inf")}
-
-    def update(self, value: Any) -> None:
-        self._acc["m"] = min(self._acc["m"], _to_float(value))
-
-    def _finalize(self, merged: Dict[str, float]) -> float:
-        return merged["m"]
 
 
 class Last(ScalarMetric):

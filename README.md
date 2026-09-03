@@ -123,32 +123,30 @@ logger.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch �
 
 ## 指标计算（多 GPU 自动同步）
 
-内置 `Mean` / `Sum` / `Max` / `Min` / `Last` / `Count`，按 epoch 组织在 `MetricGroup` 中使用：
+内置 `Mean` / `Sum` / `Last` / `Count`，按 epoch 组织在 `MetricGroup` 中使用：
 
 ```python
 import melog
-from melog import Mean, Max, MetricGroup, Sum
+from melog import Last, Mean, MetricGroup, Sum
 
 logger = melog.init("runs/my-exp")
 metrics = MetricGroup({
-    "loss": Mean(),      # 加权平均：update(loss, batch_size)
+    "loss": Mean(),      # 各 batch 等权平均
     "acc": Mean(),
     "seen": Sum(),       # 求和
-    "best_acc": Max(),   # 历史最大值
-    "lr": Mean(),        # 取最近值
+    "lr": Last(),        # 最近一次喂入值
 })
 
 for epoch in range(epochs):
     for _ in logger.progress(range(steps), epoch=epoch):
-        metrics.update(loss=loss, acc=acc, lr=lr,
-                       seen=batch_size, best_acc=acc, weight=batch_size)
+        metrics.update(loss=loss, acc=acc, seen=batch_size, lr=lr)
     logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置（epoch 沿用绑定值）
 ```
 
-- `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
-- `weight=batch_size` 传一次即可：组内所有 `Mean` 类指标自动以它加权；
-  个别指标需要不同权重时传元组覆盖，如 `loss=(loss, token_num)`
-- `Mean` / `Sum` / `Max` / `Min` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
+- 默认各 batch **等权平均**，无需传 batch_size；多 GPU 下合并为全局等权平均，而非"各卡平均值的平均"
+- 各 batch 样本数不均（如最后一个不满 batch）、需要按样本 / token 精确加权时，
+  传**元组** `(值, 权重)`：`metrics.update(loss=(loss, token_num))`
+- `Mean` / `Sum` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
 - `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
 - `logger.log_group(group, reset=True)` 等价于 `logger.scalar(group.compute()); group.reset()`
 
@@ -293,7 +291,7 @@ melog/
 ├── media.py         # 图像/音频落盘（路径复制或数组编码）
 ├── metrics/         # 指标计算与跨 GPU 同步
 │   ├── base.py      # Metric / BatchMetric 基类（自定义指标继承其一）
-│   ├── basic.py     # Mean / Sum / Max / Min / Last / Count
+│   ├── basic.py     # Mean / Sum / Last / Count
 │   ├── classification.py  # Accuracy / Precision / Recall / F1 / ConfusionMatrix
 │   └── group.py     # MetricGroup：具名指标集合
 ├── downsample.py    # 曲线降采样

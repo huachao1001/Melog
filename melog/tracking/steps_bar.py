@@ -4,7 +4,7 @@
 
     from melog import StepsBar
 
-    for step in StepsBar(loader, epoch=epoch, metrics=metrics, reset=True):
+    for step in StepsBar(loader, epoch=epoch, metrics=metrics):
         metrics.feed(loss=loss)
         melog.scalar({"loss": loss})
 
@@ -58,10 +58,10 @@ class StepsBar(tqdm):
     传入 metrics（MetricGroup）时，进度条实时显示本卡本地值——每次
     feed() 后零通信刷新 postfix（实际渲染的只有 rank0，即主卡本地
     值；无观测的指标与非数值结果自动跳过）。迭代自然结束即 gather
-    所有 rank 的状态、合并记录全局值一次（reset=True 则记录后重
-    置组内指标），曲线上得到跨 GPU 精确合并的结果::
+    所有 rank 的状态、合并记录全局值一次并重置组内指标（开启下一轮
+    统计），曲线上得到跨 GPU 精确合并的结果::
 
-        for _ in StepsBar(loader, epoch=e, metrics=metrics, reset=True):
+        for _ in StepsBar(loader, epoch=e, metrics=metrics):
             metrics.feed(...)
 
     自动记录仅在循环自然跑完时触发：提前 break / 抛异常不会记录
@@ -89,7 +89,6 @@ class StepsBar(tqdm):
         total: Optional[float] = None,
         epoch: Optional[int] = None,
         metrics: Optional[MetricGroup] = None,
-        reset: bool = False,
         **kwargs: Any,
     ):
         """绑定全局活动实例（melog.init 创建的）并打开进度条。
@@ -100,8 +99,7 @@ class StepsBar(tqdm):
             epoch: 绑定该 epoch（epoch 内步数清零、全局 x 接续、行首
                 自动标注 "epoch N"）。
             metrics: MetricGroup；bar 实时显示本卡本地值，迭代自然结束
-                自动合并记录全局值。
-            reset: 自动记录后是否重置组内指标。
+                自动合并记录全局值并重置组内指标。
             **kwargs: 其余参数透传 tqdm（desc / leave / mininterval 等）。
         """
         from ..core import current  # 延迟导入：core 也引用本模块，避免循环
@@ -114,7 +112,7 @@ class StepsBar(tqdm):
                 host._axis.bind_epoch(epoch)
         if metrics is not None:
             iterable = EpochEndIterable(
-                iterable, lambda: host._log_group(metrics, reset=reset)
+                iterable, lambda: host._log_group(metrics, reset=True)
             )
         disable = (not host._is_primary) or (not host._enable_progress) or _progress_disabled()
         if epoch is not None and "desc" not in kwargs:

@@ -241,11 +241,11 @@ def test_stepsbar_binds_epoch(lg):
 
 # -------------------------------------------------------------- StepsBar 自动记录
 def test_stepsbar_auto_log_on_complete(lg):
-    """StepsBar(metrics=...)：自然迭代结束自动合并记录；reset=True 记录后清零。"""
+    """StepsBar(metrics=...)：自然迭代结束自动合并记录，记录后清零。"""
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
-    bar = StepsBar(range(3), epoch=0, metrics=group, reset=True)
+    bar = StepsBar(range(3), epoch=0, metrics=group)
     assert bar.total == 3  # len() 透传，total 自动检测不受包装影响
     for _ in bar:
         group.feed(m=2.0)
@@ -259,7 +259,7 @@ def test_stepsbar_auto_log_each_epoch(lg):
 
     group = MetricGroup({"m": Mean()})
     for e in range(2):
-        for i in StepsBar(range(3), epoch=e, metrics=group, reset=True):
+        for i in StepsBar(range(3), epoch=e, metrics=group):
             group.feed(m=float(i + 1))
     snap = lg.store.snapshot()["m"]
     assert [(r["epoch"], r["value"]) for r in snap] == [(0, 2.0), (1, 2.0)]
@@ -270,7 +270,7 @@ def test_stepsbar_no_auto_log_on_break(lg):
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
-    bar = StepsBar(range(10), epoch=0, metrics=group, reset=True)
+    bar = StepsBar(range(10), epoch=0, metrics=group)
     for _ in bar:
         group.feed(m=1.0)
         break
@@ -323,7 +323,7 @@ def test_stepsbar_realtime_postfix(lg):
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
-    bar = StepsBar(range(4), epoch=0, metrics=group, reset=True)
+    bar = StepsBar(range(4), epoch=0, metrics=group)
     group.feed(m=1.0)
     assert bar.postfix["m"] == pytest.approx(1.0)
     group.feed(m=3.0)

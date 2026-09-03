@@ -142,9 +142,9 @@ metrics = MetricGroup({
 
 for epoch in range(epochs):
     # metrics=... 传入后：bar 实时显示本卡本地值，epoch 末自动
-    # 跨 GPU 合并 + 写日志/面板 + reset 清零（reset=True）；
+    # 跨 GPU 合并 + 写日志/面板 + reset 清零；
     # 不传 metrics 则需在 epoch 末手动 melog.scalar(metrics) + metrics.reset()
-    for _ in StepsBar(range(steps), epoch=epoch, metrics=metrics, reset=True):
+    for _ in StepsBar(range(steps), epoch=epoch, metrics=metrics):
         metrics.feed(loss=loss, acc=acc, seen=batch_size, lr=lr)  # 仅累积观测（内存），尚无输出
 ```
 - 默认各 batch **等权平均**，无需传 batch_size；多 GPU 下合并为全局等权平均，而非"各卡平均值的平均"
@@ -154,7 +154,7 @@ for epoch in range(epochs):
   在 epoch 末统一记录一次即可（交给 StepsBar 自动执行，或手动调用）
 - 跨 GPU 合并是集合操作：**所有 rank 必须以相同顺序执行**，返回值各 rank 一致；单进程自动直通
 - 手动落盘写法：`melog.scalar(metrics)`，需要开启新一轮统计时再 `metrics.reset()`
-- 实时 + 精确一步到位：`StepsBar(loader, epoch=e, metrics=metrics, reset=True)`——
+- 实时 + 精确一步到位：`StepsBar(loader, epoch=e, metrics=metrics)`——
   训练中 bar 上实时显示**本卡本地值**（每次 feed 零通信刷新 postfix，NaN 自动跳过）；
   迭代自然结束时自动 gather 所有 rank 合并出**全局值**落盘（提前 break / 抛异常不触发，
   以免各 rank 在 all_gather 处互相等待；所有 rank 都会执行，落盘仅 rank0）
@@ -311,7 +311,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 - `scalar(metrics, advance=0)` — 记录一批指标（dict 或 MetricGroup，后者跨 GPU 合并由内部完成）；坐标由 `StepsBar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
 - `image(name, data, caption=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，自动附着最近一次记录位置，Web 端页签展示（见上文）
-- `StepsBar(iterable, epoch=None, metrics=None, reset=False)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录（`reset=True` 记录后清零；提前 break / 异常不触发）（见上文）
+- `StepsBar(iterable, epoch=None, metrics=None)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录并重置组内指标（提前 break / 异常不触发）（见上文）
 - 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break / 抛异常时 bar 自动出栈（如需立即定稿可 `close()` 或用 with），否则等引用释放时兜底
 - `current_bar()` — 当前栈顶进度条（无打开的 bar 时 `None`）；深层函数需要手动推进 / 读数 / 写 postfix 时取它，免层层传参
 - `log / success / error / warn` — print 风格控制台消息（图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）

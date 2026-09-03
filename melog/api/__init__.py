@@ -58,11 +58,10 @@ def stepsbar(
     total: Optional[float] = None,
     epoch: Optional[int] = None,
     metrics: Optional[MetricGroup] = None,
-    reset: bool = False,
     **kwargs: Any,
 ) -> StepsBar:
     """模块级便捷接口：等价于 ``StepsBar(iterable, ...)``。"""
-    return StepsBar(iterable, total=total, epoch=epoch, metrics=metrics, reset=reset, **kwargs)
+    return StepsBar(iterable, total=total, epoch=epoch, metrics=metrics, **kwargs)
 
 
 def scalar(

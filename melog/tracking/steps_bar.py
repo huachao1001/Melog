@@ -36,7 +36,7 @@ class StepsBar(tqdm):
 
     本库按 epoch 组织训练记录：**每个 epoch 的循环必须用 StepsBar
     包裹**并传入 epoch，坐标（epoch/step）由它统一管理——scalar() /
-    log_group() / image() / audio() 都没有坐标参数，记录自动依附
+    image() / audio() 都没有坐标参数，记录自动依附
     当前 epoch 与下一个空槽；不用 StepsBar 包裹的记录退化为全局
     自增 x、无 epoch 分界。
 
@@ -58,7 +58,7 @@ class StepsBar(tqdm):
     传入 metrics（MetricGroup）时，进度条实时显示本卡本地值——每次
     feed() 后零通信刷新 postfix（实际渲染的只有 rank0，即主卡本地
     值；无观测的指标与非数值结果自动跳过）。迭代自然结束即 gather
-    所有 rank 的状态、log_group 全局值一次（reset=True 则记录后重
+    所有 rank 的状态、合并记录全局值一次（reset=True 则记录后重
     置组内指标），曲线上得到跨 GPU 精确合并的结果::
 
         for _ in StepsBar(loader, epoch=e, metrics=metrics, reset=True):
@@ -66,7 +66,7 @@ class StepsBar(tqdm):
 
     自动记录仅在循环自然跑完时触发：提前 break / 抛异常不会记录
     （此时各 rank 的进度可能不一致，自动 compute() 的 all_gather 会
-    互相等待甚至挂死；需要中途落盘请显式调用 scalar() / log_group()）。
+    互相等待甚至挂死；需要中途落盘请显式调用 scalar()）。
     所有 rank 都会触发回调，compute() 在各 rank 同一位置执行，落盘
     仅 rank0。
 
@@ -76,10 +76,11 @@ class StepsBar(tqdm):
     进度条）。
 
     允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，current_bar()
-    返回栈顶即当前环境；scalar() / log_group() 的 postfix 与 advance
+    返回栈顶即当前环境；scalar() 的 postfix 与 advance
     自动作用于栈顶，下层 bar 暂停渲染（计数与 postfix 照常更新），
-    栈顶关闭后自动恢复下层渲染。提前 break 的 bar 请 close()（或用
-    with 包裹），否则会一直留在栈中占位。
+    栈顶关闭后自动恢复下层渲染。提前 break / 抛异常时 bar 自动出栈
+    （迭代器释放时定稿，绑定名字的变量存续期间由 GC 兜底；如需立即
+    释放可显式 close() 或用 with 包裹）。
     """
 
     def __init__(
@@ -99,7 +100,7 @@ class StepsBar(tqdm):
             epoch: 绑定该 epoch（epoch 内步数清零、全局 x 接续、行首
                 自动标注 "epoch N"）。
             metrics: MetricGroup；bar 实时显示本卡本地值，迭代自然结束
-                自动 log_group 全局值。
+                自动合并记录全局值。
             reset: 自动记录后是否重置组内指标。
             **kwargs: 其余参数透传 tqdm（desc / leave / mininterval 等）。
         """
@@ -113,7 +114,7 @@ class StepsBar(tqdm):
                 host._axis.bind_epoch(epoch)
         if metrics is not None:
             iterable = EpochEndIterable(
-                iterable, lambda: host.log_group(metrics, reset=reset)
+                iterable, lambda: host._log_group(metrics, reset=reset)
             )
         disable = (not host._is_primary) or (not host._enable_progress) or _progress_disabled()
         if epoch is not None and "desc" not in kwargs:

@@ -13,7 +13,7 @@ class EpochEndIterable:
     供 StepsBar(..., metrics=...) 实现 epoch 末自动记录。回调发生在最后
     一个元素之后、StopIteration 传给进度条之前，此时进度条尚未关闭，
     记录的指标值能渲染进 postfix。所有 rank 都会执行回调（compute() 是
-    集合操作，各 rank 必须在同一位置调用；落盘与展示由 log_group 内部
+    集合操作，各 rank 必须在同一位置调用；落盘与展示由 scalar() 内部
     仅 rank0 处理）。
     """
 

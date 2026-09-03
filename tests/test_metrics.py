@@ -184,7 +184,7 @@ def test_group_feed_dispatch():
     group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
     # acc 按形参名/位置从 args 取 logits/labels；loss 按注册名取值（元组 = 值 + 权重）
     group.feed(args=([0.9, 0.2], [1, 0]), loss=(1.0, 2))
-    out = group.compute()
+    out = group._compute()
     assert out["acc"] == pytest.approx(1.0)
     assert out["loss"] == pytest.approx(1.0)
 
@@ -193,7 +193,7 @@ def test_group_feed_args_dict():
     """args 传字典：按键名对应 compute_batch 形参，多余的键自动忽略。"""
     group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
     group.feed(args={"logits": [0.9, 0.2], "labels": [1, 0], "extra": 1}, loss=0.5)
-    out = group.compute()
+    out = group._compute()
     assert out["acc"] == pytest.approx(1.0)
     assert out["loss"] == pytest.approx(0.5)
 
@@ -202,7 +202,7 @@ def test_group_feed_partial_scalars():
     group = MetricGroup({"loss": Mean(), "lr": Mean()})
     group.feed(loss=1.0)  # 本 batch 未提供 lr，不累积也不报错
     group.feed(loss=3.0, lr=1e-3)
-    out = group.compute()
+    out = group._compute()
     assert out["loss"] == pytest.approx(2.0)
     assert out["lr"] == pytest.approx(1e-3)
 
@@ -226,7 +226,8 @@ def test_batch_metric_with_melog(tmp_path):
     group = MetricGroup({"acc": PairAcc()})
     for _ in StepsBar(range(2)):
         group.feed(args=([0.9, 0.2], [1, 0]))
-        lg.log_group(group, reset=True)
+        lg.scalar(group)
+        group.reset()
     lg.close()
 
     path = next((tmp_path / "t").glob("**/metrics.melog"))
@@ -248,7 +249,7 @@ def test_group_merge_across_ranks(monkeypatch):
 
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
     group.feed(loss=(2.0, 2.0), acc=0.5)  # rank0: 4/2, rank1: 1/1
-    out = group.compute()
+    out = group._compute()
     # 直接比较：每组指标的合并输入相同 -> 用 MultiRankMean 逻辑验证见下个测试
     assert set(out) == {"loss", "acc"}
 
@@ -277,7 +278,7 @@ def test_group_single_gather_for_all_metrics(monkeypatch):
     monkeypatch.setattr("melog.metrics.group.gather_object", fake_gather)
     group = MetricGroup({"loss": Mean(), "total": Sum()})
     group.feed(loss=1.0, total=3.0)  # rank0: loss 1/1, total 3
-    out = group.compute()
+    out = group._compute()
     assert out["loss"] == pytest.approx(1.0)  # (1+2)/(1+2)
     assert out["total"] == pytest.approx(9.0)  # 3 + 6
     assert len(calls) == 1  # 全组只做一次 gather
@@ -288,7 +289,7 @@ def test_group_feed_scalars():
     group = MetricGroup({"loss": Mean(), "n": Count()})
     group.feed(loss=(3.0, 3.0), n=1)
     group.feed(loss=1.0, n=1)
-    out = group.compute()
+    out = group._compute()
     assert out["loss"] == pytest.approx((3.0 * 3 + 1.0) / 4)
     assert out["n"] == pytest.approx(2.0)
 
@@ -297,7 +298,7 @@ def test_group_tuple_weight_dispatch():
     """元组 (值, 权重) 按指标精确加权，其余指标等权。"""
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
     group.feed(loss=(2.0, 4), acc=0.5)
-    out = group.compute()
+    out = group._compute()
     assert out["loss"] == pytest.approx(2.0)   # sum=8, weight=4
     assert out["acc"] == pytest.approx(0.5)
 
@@ -306,7 +307,7 @@ def test_group_feed_ignores_unknown():
     """feed 只取已注册指标需要的观测，未注册/多余的键自动忽略。"""
     group = MetricGroup({"loss": Mean()})
     group.feed(acc=0.5, loss=2.0)
-    out = group.compute()
+    out = group._compute()
     assert out == {"loss": pytest.approx(2.0)}
 
 
@@ -321,7 +322,7 @@ def test_group_reset():
     group.feed(loss=1.0)
     group.reset()
     group.feed(loss=3.0)
-    assert group.compute()["loss"] == pytest.approx(3.0)
+    assert group._compute()["loss"] == pytest.approx(3.0)
 
 
 def test_group_getitem_contains_len():
@@ -333,13 +334,14 @@ def test_group_getitem_contains_len():
 
 
 # ---------------------------------------------------------------- 与 Melog 集成
-def test_log_group_records_and_resets(tmp_path):
+def test_group_compute_records_and_resets(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
     bar = StepsBar(range(4))  # 建条但不迭代
     for _ in range(2):
         group.feed(loss=1.0, acc=0.5)
-        lg.log_group(group, reset=True)
+        lg.scalar(group)
+        group.reset()
     assert bar.n == 0  # epoch 级记录默认不推进进度条
     lg.close()
 
@@ -374,7 +376,7 @@ def _gloo_worker(rank, world_size, init_file, result_dir):
         group.feed(loss=(2.0, 2.0), total=3.0)
     else:
         group.feed(loss=(1.0, 1.0), total=6.0)
-    out = group.compute()
+    out = group._compute()
     (result_dir / f"rank{rank}.json").write_text(json.dumps(out), encoding="utf-8")
     dist.barrier()
     dist.destroy_process_group()

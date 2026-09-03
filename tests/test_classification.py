@@ -293,18 +293,19 @@ def test_group_dispatch_classification():
     group = MetricGroup({"acc": Accuracy(num_classes=2), "binary_acc": Accuracy()})
     group["acc"].feed([[0.1, 0.9], [0.8, 0.2]], [1, 0])
     group["binary_acc"].feed([0.7, 0.3], [1, 0])
-    out = group.compute()
+    out = group._compute()
     assert out["acc"] == pytest.approx(1.0)
     assert out["binary_acc"] == pytest.approx(1.0)
 
 
-def test_log_group_persists_accuracy(tmp_path):
+def test_group_compute_persists_accuracy(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"acc": Accuracy(num_classes=2)})
     logits = [[0.1, 0.9], [0.7, 0.3]]
     labels = [1, 0]
     group["acc"].feed(logits, labels)
-    lg.log_group(group, reset=True)
+    lg.scalar(group)
+    group.reset()
     lg.close()
 
     path = next((tmp_path / "t").glob("**/metrics.melog"))

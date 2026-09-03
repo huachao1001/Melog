@@ -81,7 +81,7 @@ def main():
                 # 标量指标按注册名喂入；分类指标的观测单独放进 args（按位置对应）
                 metrics.feed(args=(logits, labels), loss=(loss, len(labels)))
                 if step % LOG_EVERY == LOG_EVERY - 1:
-                    out = metrics.compute()
+                    out = metrics.local()
                     # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
                     # 记录自动依附当前 epoch 与下一个空槽
                     melog.scalar({k: v for k, v in out.items() if v == v})

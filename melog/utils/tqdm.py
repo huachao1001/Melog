@@ -226,14 +226,26 @@ class tqdm:
         self.close()
 
     def __iter__(self):
-        if self.disable:
-            yield from self.iterable
+        try:
+            if self.disable:
+                yield from self.iterable
+            else:
+                for obj in self.iterable:
+                    yield obj
+                    self.update(1)
+        finally:
+            # 自然耗尽、提前 break、异常传播、生成器被 GC（GeneratorExit）
+            # 均定稿并出栈（on_close 回调解除栈登记）；自动记录不受影响，
+            # 仅自然耗尽触发（见 EpochEndIterable）
             self.close()
-            return
-        for obj in self.iterable:
-            yield obj
-            self.update(1)
-        self.close()  # 自然迭代完成即定稿（提前 break 时不关闭，与 tqdm 一致）
+
+    def __del__(self):
+        # 兜底：绑定名字后未手动 close 的 bar（如提前 break 后变量仍存活），
+        # 引用释放时自动定稿；解释器退出阶段的异常静默
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 渲染
     def _stream(self):

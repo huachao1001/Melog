@@ -153,8 +153,8 @@ class Melog:
     def current_bar(self) -> Optional[tqdm]:
         """当前栈顶进度条（无打开的 bar 时为 None）。
 
-        StepsBar 允许嵌套、以栈管理：scalar() / log_group() 的 postfix
-        与 advance 自动作用于栈顶；深层函数需要手动推进、读数或写
+        StepsBar 允许嵌套、以栈管理：scalar() 的 postfix 与 advance
+        自动作用于栈顶；深层函数需要手动推进、读数或写
         postfix 时用它获取当前 bar，免层层传参。
         """
         return self._bars.top()
@@ -162,7 +162,7 @@ class Melog:
     # ------------------------------------------------------------------ 记录指标
     def scalar(
         self,
-        metrics: Dict[str, Union[float, int, Any]],
+        metrics: Union[Dict[str, Union[float, int, Any]], MetricGroup],
         advance: int = 0,
     ) -> Dict[str, float]:
         """记录一批指标；坐标（epoch/step）由 StepsBar 自动管理。
@@ -176,12 +176,16 @@ class Melog:
         调用 scalar() 的频率即可，无需也无法手动指定坐标。
 
         Args:
-            metrics: 指标名 -> 数值（float / int / 0 维 tensor）。
+            metrics: 指标名 -> 数值（float / int / 0 维 tensor）；
+                或直接传 MetricGroup——跨 GPU 同步合并由内部完成，
+                返回值在各 rank 上一致（开启新一轮统计需再调 metrics.reset()）。
             advance: 额外推进进度条的步数（StepsBar 迭代每次已自动
                 推进 1，缺省 0；仅一个迭代内多次 scalar() 等场景需要传入）。
         Returns:
             合并后的指标（rank>0 也返回，便于本地打印）。
         """
+        if isinstance(metrics, MetricGroup):
+            metrics = metrics._compute()
         merged = reduce_metrics(metrics, op=self.reduce_op)
 
         if not self._is_primary:
@@ -218,7 +222,7 @@ class Melog:
                 （(H,W) 灰度或 (H,W,C)，C=1/3/4；浮点自动映射 0-255）。
             caption: 配文，随图显示在卡片上（如样本说明、预测对比）。
 
-        位置自动附着到最近一次 scalar() / log_group() 的记录处，不推进计数。
+        位置自动附着到最近一次 scalar() 的记录处，不推进计数。
         """
         self._media_log.image(name, data, caption=caption)
 
@@ -238,19 +242,24 @@ class Melog:
             sr: 采样率（data 为路径时忽略，沿用文件本身格式）。
             caption: 配文，随音频显示在卡片上（如转写文本、听感说明）。
 
-        位置自动附着到最近一次 scalar() / log_group() 的记录处，不推进计数。
+        位置自动附着到最近一次 scalar() 的记录处，不推进计数。
         """
         self._media_log.audio(name, data, sr=sr, caption=caption)
 
-    def log_group(
+    def _log_group(
         self,
         group: MetricGroup,
         advance: int = 0,
         reset: bool = False,
     ) -> Dict[str, float]:
-        """记录一组 Metric 指标（跨 GPU 同步由 group.compute() 内部完成）。
+        """合并记录一组 Metric 指标（内部方法，供 StepsBar epoch 末自动调用）。
 
-        所有 rank 都应调用本方法；仅 rank0 持久化与展示。坐标自动依附
+        用户侧等价写法::
+
+            melog.scalar(group)   # 跨 GPU 同步合并由 scalar 内部完成
+            group.reset()         # 需要开启新一轮统计时
+
+        所有 rank 都应调用；仅 rank0 持久化与展示。坐标自动依附
         当前绑定的 epoch（StepsBar）与下一个空槽。
 
         Args:
@@ -258,8 +267,7 @@ class Melog:
             advance: 额外推进进度条的步数，epoch 级记录默认不推进。
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """
-        values = group.compute()
-        result = self.scalar(values, advance=advance)
+        result = self.scalar(group, advance=advance)
         if reset:
             group.reset()
         return result

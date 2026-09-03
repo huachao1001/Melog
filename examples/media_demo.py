@@ -6,7 +6,7 @@
 - 图像页签：sample/grid 卡片——滑杆回放各 step 的图像，点击看原图
 - 音频页签：sample/tone 卡片——播放随训练由沙哑变纯净的音色
 
-媒体接口（坐标自动依附最近一次 scalar() / log_group() 的记录处，本示例即这种用法）：
+媒体接口（坐标自动依附最近一次 scalar() 的记录处，本示例即这种用法）：
     melog.image("名字", 图片路径/PIL/numpy/torch, caption=配文)
     melog.audio("名字", 音频路径/numpy/torch, sr=采样率, caption=配文)
 

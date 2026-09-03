@@ -21,9 +21,10 @@ class MetricGroup:
         # 单批次指标的观测单独放进 args（元组按位置 / 字典按键名）
         metrics.feed(args={"logits": logits, "labels": labels}, loss=loss, n=1)
 
-        # epoch 末：一次同步合并全部，返回全局结果，可直接记录
-        melog.scalar(metrics.compute())
-        metrics.reset()   # 开启新一轮统计
+        # epoch 末：交给 StepsBar 的 metrics=... 自动合并记录并重置；
+        # 不用 StepsBar 时手动落盘一次 + 开启新一轮统计
+        melog.scalar(metrics)
+        metrics.reset()
     """
 
     def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
@@ -74,8 +75,8 @@ class MetricGroup:
         """
         return {name: m.merge_states([m.state()]) for name, m in self._metrics.items()}
 
-    def compute(self) -> Dict[str, Any]:
-        """同步合并组内全部指标并返回全局结果。
+    def _compute(self) -> Dict[str, Any]:
+        """同步合并组内全部指标并返回全局结果（内部方法，由 scalar 调用）。
 
         所有 rank 必须以相同顺序调用（一次 all_gather 完成全部同步），
         返回值在各 rank 上一致，可直接交给 melog.scalar()。

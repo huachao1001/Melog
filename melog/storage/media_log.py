@@ -16,7 +16,7 @@ class MediaLog:
     """图像 / 音频的记录流程，由 Melog 组合持有。
 
     多 GPU 下仅 rank0 落盘与展示，其余 rank 直接返回；位置自动附着
-    最近一次 scalar() / log_group() 的记录处（Axis.resolve_attach，
+    最近一次 scalar() 的记录处（Axis.resolve_attach，
     只读、不推进计数）。
     """
 

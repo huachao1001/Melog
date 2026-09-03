@@ -24,7 +24,6 @@ __all__ = [
     "stepsbar",
     "scalar",
     "log",
-    "log_group",
     "image",
     "audio",
     "success",
@@ -67,7 +66,7 @@ def stepsbar(
 
 
 def scalar(
-    metrics: Dict[str, Union[float, int, Any]],
+    metrics: Union[Dict[str, Any], MetricGroup],
     advance: int = 0,
 ) -> Dict[str, float]:
     """模块级便捷接口：等价于 ``current().scalar(...)``。"""
@@ -92,15 +91,6 @@ def error(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) ->
 def warn(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
     """模块级便捷接口：等价于 ``current().warn(...)``。"""
     current().warn(*values, sep=sep, end=end, flush=flush)
-
-
-def log_group(
-    group: MetricGroup,
-    advance: int = 0,
-    reset: bool = False,
-) -> Dict[str, float]:
-    """模块级便捷接口：等价于 ``current().log_group(...)``。"""
-    return current().log_group(group, advance=advance, reset=reset)
 
 
 def current_bar() -> Optional[tqdm]:

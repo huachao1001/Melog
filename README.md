@@ -59,13 +59,13 @@ melog.image("sample", img)
 - 最近一次创建的实例即全局活动实例（`melog.current()` 取回），收尾后清空
 - 进程退出时经 atexit 自动收尾：落盘剩余指标、定稿进度条、停 Web、还原 print，
   无需任何手动调用
-- 模块级 `scalar / log_group / image / audio / log / success / error / warn / set_colors / current_bar` 与实例方法等价
+- 模块级 `scalar / image / audio / log / success / error / warn / set_colors / current_bar` 与实例方法等价
 - 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
 
 ## 曲线上体现 epoch
 
 本库**按 epoch 组织训练记录**：每个 epoch 的循环必须用 `StepsBar` 包裹并传入
-`epoch`，坐标（epoch / step）由它统一管理——`scalar()` / `log_group()` / `image()` /
+`epoch`，坐标（epoch / step）由它统一管理——`scalar()` / `image()` /
 `audio()` 都**没有坐标参数**，记录自动依附当前 epoch 与下一个空槽：
 
 ```python
@@ -83,7 +83,7 @@ for epoch in range(epochs):
   完全没用 `StepsBar(epoch=...)` 时退化为全局自增 x、不标注 epoch 分界
 - 要控制记录粒度（每步 / 每 N 步窗口），调整调用 `scalar()` 的频率即可，无需手动指定坐标
 - Web 曲线在每个 epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`
-- `MetricGroup` 末尾收尾直接 `melog.log_group(metrics, reset=True)`，epoch 沿用绑定值
+- `MetricGroup` 末尾收尾交给 `StepsBar` 的自动记录（见下文），epoch 沿用绑定值
 
 ## 控制台消息
 
@@ -111,11 +111,11 @@ melog.warn("学习率过大")          # 黄色 ⚠
 ```python
 melog.scalar({"loss": loss})            # 坐标自动依附当前 epoch（StepsBar 绑定）
 melog.image("train/sample", img)        # 路径 / PIL / numpy / torch
-melog.image("val/sample", img)          # 自动附着最近一次 scalar()/log_group() 的位置
+melog.image("val/sample", img)          # 自动附着最近一次 scalar() 的位置
 melog.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
 ```
 
-- 图像 / 音频自动附着到**最近一次 `scalar()` / `log_group()` 的位置**，不推进计数；
+- 图像 / 音频自动附着到**最近一次 `scalar()` 的位置**，不推进计数；
   坐标（epoch / step）由 `StepsBar` 统一管理，接口无坐标参数
 - `caption="..."` 可为每条图像 / 音频配一段文字（如样本说明、转写文本），
   显示在卡片上、随滑杆切换；换行会被保留
@@ -141,18 +141,19 @@ metrics = MetricGroup({
 })
 
 for epoch in range(epochs):
-    for _ in StepsBar(range(steps), epoch=epoch):
+    # metrics=... 传入后：bar 实时显示本卡本地值，epoch 末自动
+    # 跨 GPU 合并 + 写日志/面板 + reset 清零（reset=True）；
+    # 不传 metrics 则需在 epoch 末手动 melog.scalar(metrics) + metrics.reset()
+    for _ in StepsBar(range(steps), epoch=epoch, metrics=metrics, reset=True):
         metrics.feed(loss=loss, acc=acc, seen=batch_size, lr=lr)  # 仅累积观测（内存），尚无输出
-    # epoch 末必须记录：log_group = compute() 跨 GPU 合并 + 写日志/面板 + reset 清零；
-    # 漏掉这步，指标只留在内存里，日志中不会出现
-    melog.log_group(metrics, reset=True)
 ```
 - 默认各 batch **等权平均**，无需传 batch_size；多 GPU 下合并为全局等权平均，而非"各卡平均值的平均"
 - 各 batch 样本数不均（如最后一个不满 batch）、需要按样本 / token 精确加权时，
   传**元组** `(值, 权重)`：`metrics.feed(loss=(loss, token_num))`
-- `Mean` / `Sum` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
-- `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
-- `melog.log_group(group, reset=True)` 等价于 `melog.scalar(group.compute()); group.reset()`
+- `melog.scalar(metrics)` 随时可落盘当前累计值；**必须算完一个 epoch 才有意义的指标**，
+  在 epoch 末统一记录一次即可（交给 StepsBar 自动执行，或手动调用）
+- 跨 GPU 合并是集合操作：**所有 rank 必须以相同顺序执行**，返回值各 rank 一致；单进程自动直通
+- 手动落盘写法：`melog.scalar(metrics)`，需要开启新一轮统计时再 `metrics.reset()`
 - 实时 + 精确一步到位：`StepsBar(loader, epoch=e, metrics=metrics, reset=True)`——
   训练中 bar 上实时显示**本卡本地值**（每次 feed 零通信刷新 postfix，NaN 自动跳过）；
   迭代自然结束时自动 gather 所有 rank 合并出**全局值**落盘（提前 break / 抛异常不触发，
@@ -206,7 +207,8 @@ for logits, labels in val_loader:
     # feed：单批次指标的观测放 args（元组按位置 / 字典按键名），
     # 标量指标按注册名喂入
     metrics.feed(args=(logits, labels), loss=(loss, batch_size))
-melog.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
+melog.scalar(metrics)                 # epoch 末：跨 GPU 同步 + 记录
+metrics.reset()                       # 开启新一轮统计
 ```
 
 - `Accuracy(topk=k)`：真实类别在前 k 个预测中即算正确
@@ -247,9 +249,10 @@ metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
              loss=(loss, batch_size))
 
-# epoch 末：log_group = compute() 跨 GPU 同步合并 + 写日志/推送面板 + reset 清零。
-# 不调用这步，指标只留在内存里——日志中不会出现，也不会归零开启下一轮
-melog.log_group(metrics, reset=True)
+# epoch 末：melog.scalar(metrics) = 跨 GPU 同步合并 + 写日志/推送面板，
+# 再 reset 清零。不做这步，指标只留在内存里——日志中不会出现，也不会归零开启下一轮
+melog.scalar(metrics)
+metrics.reset()
 ```
 
 **epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
@@ -306,10 +309,10 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 ### 主要方法
 
-- `scalar(metrics, advance=0)` — 记录一批指标；坐标由 `StepsBar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
+- `scalar(metrics, advance=0)` — 记录一批指标（dict 或 MetricGroup，后者跨 GPU 合并由内部完成）；坐标由 `StepsBar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
 - `image(name, data, caption=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，自动附着最近一次记录位置，Web 端页签展示（见上文）
-- `StepsBar(iterable, epoch=None, metrics=None, reset=False)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值并 `log_group`（`reset=True` 记录后清零；提前 break / 异常不触发）（见上文）
-- 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break 的 bar 请 `close()`（或用 with），否则一直留在栈中占位
+- `StepsBar(iterable, epoch=None, metrics=None, reset=False)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录（`reset=True` 记录后清零；提前 break / 异常不触发）（见上文）
+- 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break / 抛异常时 bar 自动出栈（如需立即定稿可 `close()` 或用 with），否则等引用释放时兜底
 - `current_bar()` — 当前栈顶进度条（无打开的 bar 时 `None`）；深层函数需要手动推进 / 读数 / 写 postfix 时取它，免层层传参
 - `log / success / error / warn` — print 风格控制台消息（图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）
 - 收尾无需手动调用：进程退出时经 atexit 自动落盘剩余指标、定稿进度条、停 Web、还原 print

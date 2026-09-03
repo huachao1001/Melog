@@ -198,13 +198,13 @@ def test_no_epoch_records_omit_epoch_key(lg):
     assert "epoch" not in rec
 
 
-def test_log_group_uses_bound_epoch(lg):
+def test_group_compute_uses_bound_epoch(lg):
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
     for _ in StepsBar(range(2), epoch=1):
         group.feed(m=3.0)
-    lg.log_group(group)  # 自动依附绑定的 epoch 与下一个空槽
+    lg.scalar(group)  # 自动依附绑定的 epoch 与下一个空槽
     snap = lg.store.snapshot()["m"]
     assert snap == [{"step": 0, "value": 3.0, "epoch": 1}]
 
@@ -241,7 +241,7 @@ def test_stepsbar_binds_epoch(lg):
 
 # -------------------------------------------------------------- StepsBar 自动记录
 def test_stepsbar_auto_log_on_complete(lg):
-    """StepsBar(metrics=...)：自然迭代结束自动 log_group；reset=True 记录后清零。"""
+    """StepsBar(metrics=...)：自然迭代结束自动合并记录；reset=True 记录后清零。"""
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
@@ -250,7 +250,7 @@ def test_stepsbar_auto_log_on_complete(lg):
     for _ in bar:
         group.feed(m=2.0)
     assert lg.store.snapshot()["m"] == [{"step": 0, "value": 2.0, "epoch": 0}]
-    assert group.compute() != group.compute()  # 已重置 -> NaN
+    assert group._compute() != group._compute()  # 已重置 -> NaN
 
 
 def test_stepsbar_auto_log_each_epoch(lg):
@@ -292,6 +292,27 @@ def test_stepsbar_no_auto_log_on_exception(lg):
     assert lg.store.snapshot() == {}
 
 
+def test_stepsbar_break_closes_bar(lg):
+    """提前 break：bar 自动定稿出栈，无需手动 close。"""
+    bar = StepsBar(range(10), epoch=0)
+    for _ in bar:
+        break
+    assert lg.current_bar() is None  # 已自动出栈
+    assert bar._closed
+
+
+def test_stepsbar_nested_break_restores_outer(lg):
+    """嵌套 bar 内层提前 break：自动出栈并恢复外层渲染。"""
+    outer = StepsBar(range(10), epoch=0)
+    for _ in outer:
+        inner = StepsBar(range(10), epoch=0)
+        for _ in inner:
+            break
+        assert lg.current_bar() is outer  # 内层已自动出栈，恢复外层
+        break
+    assert lg.current_bar() is None
+
+
 def test_stepsbar_metrics_type_check(lg):
     with pytest.raises(TypeError):
         StepsBar(range(3), metrics={"m": 1.0})
@@ -311,7 +332,7 @@ def test_stepsbar_realtime_postfix(lg):
         pass
     # 自然结束：gather 全局值落盘并重置；曲线得到精确结果
     assert lg.store.snapshot()["m"] == [{"step": 0, "value": 2.0, "epoch": 0}]
-    assert group.compute() != group.compute()  # 已重置 -> NaN
+    assert group._compute() != group._compute()  # 已重置 -> NaN
 
 
 def test_stepsbar_postfix_skips_nan(lg):

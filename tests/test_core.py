@@ -177,8 +177,8 @@ def test_train_context_returns_progress(mlog):
     with mlog.train(total=10) as bar:
         for _ in range(3):
             mlog.log({"loss": 0.1})
-            bar.advance(1)
-        assert bar.completed == 3
+            bar.update(1)
+        assert bar.n == 3
 
 
 def test_finish_idempotent(mlog):

@@ -87,7 +87,7 @@ def main():
                         mlog.log({k: v for k, v in out.items() if v == v},
                                    epoch=epoch, step=step, advance=LOG_EVERY)
                         metrics.reset()
-                    bar.advance(1)
+                    bar.update(1)
                     time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")

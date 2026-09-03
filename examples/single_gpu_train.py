@@ -28,7 +28,7 @@ def main():
                 # 都不传时内部自动统计 step
                 mlog.log({"loss": loss, "acc": acc, "lr": 1e-3 * (0.98 ** g)},
                            epoch=epoch, step=step)
-                bar.advance(1)
+                bar.update(1)
                 time.sleep(0.03)
 
     mlog.finish()

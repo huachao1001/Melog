@@ -212,7 +212,7 @@ def test_batch_metric_with_melog(tmp_path):
         for _ in range(2):
             group.feed(logits=[0.9, 0.2], labels=[1, 0])
             lg.log_group(group, reset=True)
-            bar.advance(1)
+            bar.update(1)
     lg.finish()
 
     path = next((tmp_path / "t").glob("**/metrics.melog"))
@@ -315,7 +315,7 @@ def test_log_group_records_and_resets(tmp_path):
         for _ in range(2):
             group.update(loss=1.0, acc=0.5)
             lg.log_group(group, reset=True)
-    assert bar.completed == 0  # epoch 级记录默认不推进进度条
+    assert bar.n == 0  # epoch 级记录默认不推进进度条
     lg.finish()
 
     path = next((tmp_path / "t").glob("**/metrics.melog"))

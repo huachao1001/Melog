@@ -56,7 +56,7 @@ def main():
                     best_acc=local_acc,
                     lr=1e-3 * (0.98 ** (epoch * STEPS + step)),
                 )
-                bar.advance(1)
+                bar.update(1)
                 time.sleep(0.02)
 
             # epoch 末：所有 rank 统一调用，得到全局一致结果；记录后重置

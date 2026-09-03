@@ -8,7 +8,7 @@ demo ██████████░░░░░░  45% 90/200 0:00:03 loss=0
 
 ## 特性
 
-- **控制台实时进度条**：训练期间在 rich 进度条尾部实时刷新最新指标值
+- **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），尾部实时刷新最新指标；进度条与 print 同步镜像到 console.log（进度条行 2 秒节流刷新）
 - **多 GPU 指标合并**：基于 `torch.distributed` all_reduce 跨进程聚合（默认取均值），仅 rank0 记录与展示；未装 torch 自动退化单进程
 - **Web 可视化**：FastAPI + WebSocket + ECharts，后台线程运行，实时推送曲线，断线自动重连
 - **持久化**：指标自动写入 JSONL，供离线分析
@@ -31,7 +31,7 @@ with mlog.train(total=1000) as bar:
     for step in range(1000):
         loss = train_one_step()
         mlog.log({"loss": loss, "lr": 1e-3})   # 记录 + 更新进度条 + 推送 Web
-        bar.advance(1)
+        bar.update(1)
 
 mlog.finish()   # 落盘剩余指标并停止 Web 服务
 ```
@@ -96,7 +96,7 @@ with mlog.train(total=steps * epochs) as bar:
         for _ in range(steps):
             metrics.update(loss=(loss, batch_size), acc=(acc, batch_size),
                            seen=batch_size, best_acc=acc, lr=lr)
-            bar.advance(1)
+            bar.update(1)
         mlog.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
 ```
 
@@ -218,7 +218,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 - `log(metrics, step=None, epoch=None, advance=1)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
 - `log_image(name, data, step=None, epoch=None)` / `log_audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
-- `train(total)` — 返回进度条上下文管理器（`bar.advance(n)` 推进）
+- `train(total)` — 返回进度条上下文管理器（`bar.update(n)` 推进）
 - `finish()` — 落盘并停止 Web 服务
 
 进度条显示的指标可通过环境变量 `MELOG_DISABLE_PROGRESS=1` 全局关闭。
@@ -248,7 +248,8 @@ melog/
 │   ├── classification.py  # Accuracy / Precision / Recall / F1 / ConfusionMatrix
 │   └── group.py     # MetricGroup：具名指标集合
 ├── downsample.py    # 曲线降采样
-├── progress.py      # rich 进度条 + 指标列
+├── tqdm.py          # 自研进度条（tqdm 兼容，样式重设计）
+├── mirror.py        # 控制台日志镜像：进度条就地刷新 + stdio 接管
 └── web/
     ├── server.py    # WebServer：uvicorn 线程生命周期
     ├── app.py       # ApiRoutes：路由注册（指标/媒体/文件浏览/加载/WS）

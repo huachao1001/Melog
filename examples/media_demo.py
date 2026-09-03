@@ -71,7 +71,7 @@ def main():
                     if g % AUD_EVERY == 0:
                         mlog.log_audio("sample/tone", make_audio(g, total), sr=22050,
                                          caption=f"纯净度 {g / total:.0%}，噪声已衰减")
-                    bar.advance(1)
+                    bar.update(1)
                     time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")

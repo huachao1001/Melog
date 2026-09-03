@@ -3,7 +3,7 @@
 核心能力：
 - 训练指标记录与 JSONL 持久化
 - 多 GPU 指标合并（torch.distributed all_reduce）
-- 控制台实时进度条显示指标
+- 控制台实时进度条（tqdm 兼容）与控制台日志镜像
 - Web 可视化（FastAPI + WebSocket + ECharts）
 """
 
@@ -19,12 +19,13 @@ from typing import Any, Dict, Optional, Union
 from .distributed import get_rank, reduce_metrics
 from .media import sanitize_name, save_audio, save_image
 from .metrics import MetricGroup
-from .progress import TrainProgress
+from .mirror import Mirror
+from .tqdm import tqdm
 from .web.media_store import MediaStore
 from .web.server import WebServer
 from .web.store import MetricStore
 
-__all__ = ["Melog"]
+__all__ = ["Melog", "tqdm"]
 
 
 class Melog:
@@ -37,7 +38,7 @@ class Melog:
         ...     for step in range(100):
         ...         loss = 1.0 / (step + 1)
         ...         mlog.log({"loss": loss, "lr": 1e-3})
-        ...         bar.advance(1)
+        ...         bar.update(1)
     """
 
     def __init__(
@@ -67,6 +68,7 @@ class Melog:
         self.project = project
         self.reduce_op = reduce_op
         self._flush_every = max(1, flush_every)
+        self._enable_progress = enable_progress
         self._rank = get_rank()
         self._is_primary = self._rank == 0
         self._step = 0
@@ -97,7 +99,12 @@ class Melog:
             )
             self._web.start()
 
-        self._progress: Optional[TrainProgress] = None
+        self._progress: Optional[tqdm] = None
+        # 控制台日志镜像（仅 rank0）：进度条与 print 同步写入 console.log
+        self.mirror: Optional[Mirror] = None
+        if self._is_primary:
+            self.mirror = Mirror(self._run_dir / "console.log")
+            self.mirror.hook_stdio()
 
     # ------------------------------------------------------------------ 运行目录
     def _prepare_run_dir(self, output_dir: Optional[str]) -> Path:
@@ -114,13 +121,16 @@ class Melog:
         return self._run_dir
 
     # ------------------------------------------------------------------ 训练上下文
-    def train(self, total: int, description: str = "train") -> "TrainProgress":
-        """返回训练进度条上下文管理器（非分布式或 rank0 才真正渲染）。"""
+    def train(self, total: int, description: str = "train") -> tqdm:
+        """返回 tqdm 兼容的训练进度条（用法与 tqdm.tqdm 一致）。
+
+        进度条实时渲染到控制台，并经 Mirror 同步进 console.log；
+        非 rank0 或设置 MELOG_DISABLE_PROGRESS=1 时静默。
+        """
         if self._progress is not None:
             raise RuntimeError("train() 上下文不可嵌套")
-        if not self._is_primary or not _progress_enabled():
-            return _NullProgress()
-        self._progress = TrainProgress(total=total, description=description)
+        disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
+        self._progress = tqdm(total=total, desc=description, disable=disable)
         return self._progress
 
     # ------------------------------------------------------------------ 记录指标
@@ -317,7 +327,7 @@ class Melog:
 
     def _update_progress(self, metrics: Dict[str, float]) -> None:
         if self._progress is not None:
-            self._progress.show_metrics(metrics)
+            self._progress.set_postfix(metrics)
 
     def _maybe_flush(self) -> None:
         self._pending += 1
@@ -335,7 +345,7 @@ class Melog:
 
     # ------------------------------------------------------------------ 收尾
     def finish(self) -> None:
-        """落盘剩余指标并停止 Web 服务。"""
+        """落盘剩余指标，定稿进度条与日志镜像，停止 Web 服务。"""
         if self._closed:
             return
         self._closed = True
@@ -344,6 +354,10 @@ class Melog:
         if self._progress is not None:
             self._progress.close()
             self._progress = None
+        if self.mirror is not None:
+            self.mirror.unhook_stdio()
+            self.mirror.close()
+            self.mirror = None
         if self._web is not None:
             self._web.stop()
             self._web = None
@@ -358,25 +372,6 @@ class Melog:
         self.finish()
 
 
-class _NullProgress:
-    """非主进程下的空进度条，保持接口一致。"""
-
-    def advance(self, n: int = 1) -> None:
-        pass
-
-    def show_metrics(self, metrics: Dict[str, float]) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-    def __enter__(self) -> "_NullProgress":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        pass
-
-
-def _progress_enabled() -> bool:
-    # 非 TTY 环境下 rich 也能渲染，但 CI 日志里进度条噪音大，保留开关
-    return os.environ.get("MELOG_DISABLE_PROGRESS", "0") != "1"
+def _progress_disabled() -> bool:
+    # CI 日志里进度条噪音大，保留开关
+    return os.environ.get("MELOG_DISABLE_PROGRESS", "0") == "1"

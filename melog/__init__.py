@@ -1,6 +1,6 @@
 """Melog 包入口。"""
 
-from .core import Melog
+from .core import Melog, tqdm
 from .metrics import (
     Accuracy,
     AUC,
@@ -22,6 +22,7 @@ from .metrics import (
 __version__ = "0.1.0"
 __all__ = [
     "Melog",
+    "tqdm",
     "Metric",
     "BatchMetric",
     "MetricGroup",

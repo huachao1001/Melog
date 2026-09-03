@@ -32,7 +32,7 @@ def main():
                     "lr": 1e-3 * (0.995 ** step),
                     "grad_norm": grad_norm,
                 })
-                bar.advance(1)
+                bar.update(1)
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")

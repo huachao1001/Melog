@@ -36,10 +36,13 @@ class MetricGroup:
     def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
         self._metrics: Dict[str, Metric] = dict(metrics or {})
         # 每次 feed() 后触发的回调（由 StepsBar 挂载，用于进度条实时显示本地值）
-        self._on_feed: Optional[Callable[[], None]] = None
+        self._on_feed: Optional[Callable[[bool], None]] = None
         # StepsBar 每次迭代自动注入的当前批次样本数（None = 未知，等权）
         self._batch_count: Optional[float] = None
         self._count_warned = False  # 识别失败仅警告一次
+        # 本 bar 内是否有过 write=True 的 feed：决定 epoch 末是否自动合并
+        # （全程 write=False = 完全手动模式，由用户 melog.scalar(metrics) 落盘）
+        self._realtime_fed = False
 
     def add(self, name: str, metric: Metric) -> "MetricGroup":
         if name in self._metrics:
@@ -53,9 +56,10 @@ class MetricGroup:
 
         挂接 StepsBar(metrics=...) 时，feed 后默认（write=True）即自动
         把本卡本地值写入日志/面板（零通信，仅 rank0 落盘），无需再手动
-        scalar；epoch 末由 StepsBar 跨 GPU 合并记录并 reset。write=False
-        时只累积内存，由手动 melog.scalar(metrics) 落盘。未挂接
-        StepsBar 的组不自动记录，同样手动 scalar 落盘。
+        scalar；epoch 末由 StepsBar 跨 GPU 合并记录并 reset。整个 bar
+        内全程 write=False 则进入完全手动模式：不实时写入、epoch 末也
+        不自动合并，由手动 melog.scalar(metrics) 落盘。未挂接
+        StepsBar 的组始终手动 scalar 落盘。
 
         Args:
             args: 单批次指标（BatchMetric，如分类指标与自定义

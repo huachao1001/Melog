@@ -146,8 +146,8 @@ for epoch in range(epochs):
     # 一次并 reset 清零
     for _ in StepsBar(range(steps), epoch=epoch, metrics=metrics):
         metrics.feed(loss=loss, acc=acc, seen=batch_size, lr=lr)
-    # feed(..., write=False) 可关闭实时写入：只累积内存，epoch 末（或
-    # 任意时刻）手动 melog.scalar(metrics) 落盘
+    # feed(..., write=False) 只累积内存；全程 write=False 则 epoch 末
+    # 也不自动合并（完全手动模式），手动 melog.scalar(metrics) 落盘
 ```
 - `Mean` 默认按 StepsBar 自动识别的**批次样本数**精确平均（feed 无需传
   batch_size；各 batch 等样本数时即等权）；多 GPU 下合并为全局样本平均，
@@ -162,7 +162,9 @@ for epoch in range(epochs):
   每次 feed 自动把本卡本地值写入日志/面板（零通信，仅 rank0 落盘），bar 同步实时显示；
   迭代自然结束时自动 gather 所有 rank 合并出**全局值**再记录一次（提前 break / 抛异常不触发，
   以免各 rank 在 all_gather 处互相等待；所有 rank 都会执行，落盘仅 rank0）。
-  `feed(..., write=False)` 关闭实时写入，改为手动 `melog.scalar(metrics)` 落盘
+  `feed(..., write=False)` 关闭实时写入；整个 bar 全程 write=False 时 epoch 末
+  也不自动合并（完全手动模式），由手动 `melog.scalar(metrics)` 落盘
+  （验证集场景见上文分类指标示例）
 
 ### feed 如何分发观测
 
@@ -208,12 +210,14 @@ metrics = MetricGroup({
     "f1": F1(num_classes=10),          # 多分类：二维 (N, K) logits 按行 argmax
 })
 
-for logits, labels in val_loader:
+# 验证集：无需逐 batch 实时写曲线，用 write=False 只累积，
+# 验证完手动跨 GPU 合并落盘一次（完全手动模式：epoch 末也不自动记录）
+for logits, labels in StepsBar(val_loader, epoch=epoch, metrics=val_metrics):
     # feed：单批次指标的观测放 args（元组按位置 / 字典按键名），
-    # 标量指标按注册名喂入
-    metrics.feed(args=(logits, labels), loss=(loss, batch_size))
-melog.scalar(metrics)                 # epoch 末：跨 GPU 同步 + 记录
-metrics.reset()                       # 开启新一轮统计
+    # 标量指标按注册名喂入（loss 自动按批次样本数平均）
+    val_metrics.feed(args=(logits, labels), loss=loss, write=False)
+melog.scalar(val_metrics)             # 验证结束：跨 GPU 同步 + 记录
+val_metrics.reset()                   # 开启新一轮统计
 ```
 
 - `Accuracy(topk=k)`：真实类别在前 k 个预测中即算正确

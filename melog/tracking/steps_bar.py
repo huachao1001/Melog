@@ -81,13 +81,15 @@ class StepsBar(tqdm):
                 melog.scalar({"loss": loss})   # 坐标自动依附 epoch
 
     传入 metrics（MetricGroup）时，每次 feed() 即自动记录本卡本地值
-    进日志/面板（零通信，仅 rank0 落盘；write=False 则只累积内存，
-    手动 melog.scalar(metrics) 落盘），同时刷新 postfix 实时显示
-    （NaN 与非数值结果自动跳过）；并自动从批次数据识别样本数注入指标
-    组，Mean 按它精确平均（feed 无需传元组），识别失败（如迭代 range）
-    回退等权平均并警告一次。迭代自然结束再 gather 所有 rank 的状态、
-    合并记录全局值一次并重置组内指标（开启下一轮统计），曲线上
-    epoch 内是主卡实时值、epoch 末是跨 GPU 精确合并的结果::
+    进日志/面板（零通信，仅 rank0 落盘；write=False 则只累积内存），
+    同时刷新 postfix 实时显示（NaN 与非数值结果自动跳过）；并自动从
+    批次数据识别样本数注入指标组，Mean 按它精确平均（feed 无需传元
+    组），识别失败（如迭代 range）回退等权平均并警告一次。迭代自然
+    结束再 gather 所有 rank 的状态、合并记录全局值一次并重置组内指
+    标（开启下一轮统计）——全程 write=False 的 bar 除外（完全手动模
+    式：不实时写入、epoch 末也不自动合并，由手动 melog.scalar(metrics)
+    落盘）。曲线上 epoch 内是主卡实时值、epoch 末是跨 GPU 精确合并
+    的结果::
 
         for _ in StepsBar(loader, epoch=e, metrics=metrics):
             metrics.feed(...)
@@ -140,6 +142,7 @@ class StepsBar(tqdm):
             with host._lock:
                 host._axis.bind_epoch(epoch)
         if metrics is not None:
+            metrics._realtime_fed = False  # 每个 bar 重置：决定 epoch 末是否自动合并
 
             def _on_item(item: Any) -> None:
                 # 每次迭代把识别到的批次样本数注入指标组（feed 前生效）
@@ -153,11 +156,12 @@ class StepsBar(tqdm):
                         "需精确加权时在 feed 中传 (值, 观测数) 元组"
                     )
 
-            iterable = EpochEndIterable(
-                iterable,
-                lambda: host._log_group(metrics, reset=True),
-                on_item=_on_item,
-            )
+            def _on_end() -> None:
+                # 全程 write=False 的 bar 不自动合并（完全手动模式）
+                if metrics._realtime_fed:
+                    host._log_group(metrics, reset=True)
+
+            iterable = EpochEndIterable(iterable, _on_end, on_item=_on_item)
         disable = (not host._is_primary) or (not host._enable_progress) or _progress_disabled()
         if epoch is not None and "desc" not in kwargs:
             kwargs["desc"] = f"epoch {epoch}"
@@ -186,6 +190,7 @@ class StepsBar(tqdm):
                 return
             self.set_postfix(snap)
             if write:
+                metrics._realtime_fed = True
                 host._record_local(snap)
 
         metrics._on_feed = _on_feed

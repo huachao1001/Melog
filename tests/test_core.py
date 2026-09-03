@@ -397,7 +397,7 @@ def test_stepsbar_realtime_postfix(lg):
 
 
 def test_stepsbar_feed_write_false(lg):
-    """全程 write=False = 完全手动模式：不实时写入、epoch 末也不自动合并。"""
+    """write=False 只关闭逐 feed 实时写入；epoch 末仍自动合并记录 + reset。"""
     from melog.metrics import Mean, MetricGroup
 
     group = MetricGroup({"m": Mean()})
@@ -406,25 +406,10 @@ def test_stepsbar_feed_write_false(lg):
     assert bar.postfix["m"] == pytest.approx(1.0)  # postfix 照常实时显示
     for _ in bar:
         group.feed(m=2.0, write=False)
-    assert lg.store.snapshot() == {}  # 无实时记录、无 epoch 末自动合并
-    lg.scalar(group)  # 手动落盘（跨 GPU 合并）
-    # 全局值含循环前的观测：(1.0 + 2.0*3) / 4
-    assert lg.store.snapshot()["m"][0]["value"] == pytest.approx(1.75)
-    group.reset()
-
-
-def test_stepsbar_write_mixed_still_auto_merges(lg):
-    """只要有过一次 write=True 的 feed，epoch 末仍自动合并。"""
-    from melog.metrics import Mean, MetricGroup
-
-    group = MetricGroup({"m": Mean()})
-    bar = StepsBar(range(3), epoch=0, metrics=group)
-    group.feed(m=1.0, write=False)
-    for _ in bar:
-        group.feed(m=2.0)  # 默认 write=True
     snap = lg.store.snapshot()["m"]
-    assert len(snap) == 4  # 3 条实时记录 + epoch 末全局记录
-    assert snap[-1]["value"] == pytest.approx(1.75)  # (1.0 + 2.0*3) / 4
+    assert len(snap) == 1  # 无逐 feed 本地记录，仅 epoch 末全局记录
+    # 全局值含循环前的观测：(1.0 + 2.0*3) / 4
+    assert snap[0]["value"] == pytest.approx(1.75)
     assert group._compute() != group._compute()  # 已重置 -> NaN
 
 

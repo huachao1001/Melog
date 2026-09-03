@@ -17,6 +17,8 @@
 
     [110/200] loss=0.2153 ━━━━━━━━━━━━────────────  55.0% [0:03<0:03 33.3it/s]
 
+    train loss=0.2153 ━━━━━━━━━━━━────────────  55.0% [110/200] [0:03<0:03 33.3it/s]
+
 各段定宽右对齐：数值位数变化不改变行宽，尾部（条形图/百分比/耗时）
 逐帧位置稳定不抖动。
 
@@ -333,13 +335,13 @@ class tqdm:
             filled = int(frac * BAR_WIDTH)
             bar = self._render_bar(filled, use_color)
             n_str = str(self.n).rjust(len(str(self.total)))
-            parts.append(seg(f"[{n_str}/{self.total}]", _CYAN))
             parts.append(postfix)
             parts.append((bar, _FILL * filled + _EMPTY * (BAR_WIDTH - filled)))
             parts.append(seg(f"{100 * frac:5.1f}%", _ACCENT_BOLD))
+            parts.append(seg(f"[{n_str}/{self.total}]", _CYAN))
         else:
-            parts.append(seg(f"[{self.n}{self.unit}]", _CYAN))
             parts.append(postfix)
+            parts.append(seg(f"[{self.n}{self.unit}]", _CYAN))
         parts.extend(tail)
 
         drop_empty = lambda p: bool(p[0])  # noqa: E731  # 空片段不占位，避免多余空格

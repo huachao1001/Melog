@@ -110,15 +110,14 @@ def test_tqdm_iterable_mode():
 
 
 def test_tqdm_layout_order():
-    """布局：[n/total] 最前，指标其后，条形图与耗时殿后。"""
+    """布局：指标最前，条形图其后，[n/total] 在百分比后、耗时尾段前。"""
     out = io.StringIO()
     with tqdm(total=10, file=out, mininterval=0) as bar:
         bar.update(1)
         bar.set_postfix(loss=0.5)
     line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1].rstrip()
-    assert line.startswith("[ 1/10]")  # n 右对齐到 total 宽度
-    assert line.index("loss=0.5") < line.index("━") < line.index("[0:00")
-    assert line.endswith("]")  # 耗时<剩余 与速率同在一个中括号内
+    assert line.endswith("[ 1/10] [0:00]")  # 计数在耗时尾段前（n 右对齐到 total 宽度）
+    assert line.index("loss=0.5") < line.index("━") < line.index("100.0%") < line.index("[ 1/10]")
     assert not line.startswith("train")  # 无 desc 时不显示前缀
 
 

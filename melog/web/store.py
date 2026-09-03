@@ -6,7 +6,7 @@ import threading
 from collections import defaultdict
 from typing import Dict, List, Optional
 
-from ..downsample import downsample
+from ..utils.downsample import downsample
 
 
 class MetricStore:

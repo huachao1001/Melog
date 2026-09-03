@@ -10,18 +10,18 @@ import melog
 
 
 def main():
-    logger = melog.init("melog_runs/console-demo", enable_web=False)
+    melog.init("melog_runs/console-demo", enable_web=False)
 
-    logger.log("普通消息：多参数", {"k": 1}, 2)   # 终端默认色（黑字），无前缀
-    logger.success("模型保存成功 -> checkpoint.pt")  # 绿色 ✔
-    logger.error("加载失败：文件不存在")             # 红色 ✘
-    logger.warn("学习率过大，可能不收敛")            # 黄色 ⚠
+    melog.log("普通消息：多参数", {"k": 1}, 2)   # 终端默认色（黑字），无前缀
+    melog.success("模型保存成功 -> checkpoint.pt")  # 绿色 ✔
+    melog.error("加载失败：文件不存在")             # 红色 ✘
+    melog.warn("学习率过大，可能不收敛")            # 黄色 ⚠
 
     # 官方 print 被拦截，内部改走 log()（自动同步 console.log）
     print("这行是用官方 print 打的，内部已改走 log()")
 
-    for step in logger.stepsbar(range(30)):
-        logger.scalar({"loss": 1.0 / (step + 1)})
+    for step in melog.stepsbar(range(30)):
+        melog.scalar({"loss": 1.0 / (step + 1)})
         time.sleep(0.05)
 
     # 进程退出时自动收尾：落盘剩余指标、还原 print（本行之后的输出不再进 console.log）

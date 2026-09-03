@@ -20,7 +20,7 @@ from .store import MetricStore
 from .view import MetricView
 from .ws import WsHub
 
-logger = logging.getLogger("melog.web")
+_log = logging.getLogger("melog.web")
 
 
 class WebServer:
@@ -111,7 +111,7 @@ class WebServer:
         self.hub.publish(payload)
 
     def media_url(self, relpath: str) -> str:
-        from ..media import media_url
+        from ..storage.media import media_url
 
         return media_url(relpath)
 
@@ -124,7 +124,7 @@ class WebServer:
         self._started.wait(timeout=10)
         # 等到端口真正可连接再返回，避免并发实例的端口探测竞态
         self._wait_listening()
-        logger.info("Melog Web 已启动: http://%s:%d", self.host, self.port)
+        _log.info("Melog Web 已启动: http://%s:%d", self.host, self.port)
 
     def _wait_listening(self, timeout: float = 10) -> bool:
         import socket
@@ -166,7 +166,7 @@ class WebServer:
         try:
             loop.run_until_complete(self._server.serve())
         except Exception as e:  # 端口占用等场景不拖垮训练
-            logger.warning("Melog Web 服务异常退出: %s", e)
+            _log.warning("Melog Web 服务异常退出: %s", e)
 
     def stop(self) -> None:
         if self._server is not None:

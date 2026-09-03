@@ -25,16 +25,17 @@ pip install -e .            # 基础安装
 
 ```python
 import melog
+from melog import StepsBar
 
-logger = melog.init("runs/my-exp")   # 日志保存路径；端口缺省自动选空闲端口
-                                     # Web 地址启动时自动打印，也可读 logger.web_url
+melog.init("runs/my-exp")            # 日志保存路径；端口缺省自动选空闲端口
+                                     # Web 地址启动时自动打印，也可读 melog.current().web_url
 
-for step in logger.stepsbar(range(1000)):     # tqdm 风格：自动推进，无需手动 update
+for step in StepsBar(range(1000)):   # tqdm 风格：自动推进，无需手动 update
     loss = train_one_step()
-    logger.scalar({"loss": loss, "lr": 1e-3})    # 记录 + 刷新进度条指标 + 推送 Web
+    melog.scalar({"loss": loss, "lr": 1e-3})   # 记录 + 刷新进度条指标 + 推送 Web
 ```
 
-训练期间浏览器打开启动时打印的 Web 地址（即 `logger.web_url`）查看实时曲线。
+训练期间浏览器打开启动时打印的 Web 地址（即 `melog.current().web_url`）查看实时曲线。
 
 ## 全局共享
 
@@ -44,7 +45,7 @@ for step in logger.stepsbar(range(1000)):     # tqdm 风格：自动推进，无
 ```python
 import melog
 
-logger = melog.init(log_dir="runs/my-exp")   # 日志保存路径；端口缺省自动选空闲端口
+melog.init(log_dir="runs/my-exp")   # 日志保存路径；端口缺省自动选空闲端口
 
 # 任意其他模块中：
 import melog
@@ -58,29 +59,31 @@ melog.image("sample", img)
 - 最近一次创建的实例即全局活动实例（`melog.current()` 取回），收尾后清空
 - 进程退出时经 atexit 自动收尾：落盘剩余指标、定稿进度条、停 Web、还原 print，
   无需任何手动调用
-- 模块级 `scalar / log_group / image / audio / log / success / error / warn / set_colors` 与实例方法等价
+- 模块级 `scalar / log_group / image / audio / log / success / error / warn / set_colors / current_bar` 与实例方法等价
 - 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
 
 ## 曲线上体现 epoch
 
-本库**按 epoch 组织训练记录**：每个 epoch 的循环必须用 `stepsbar()` 包裹并传入
+本库**按 epoch 组织训练记录**：每个 epoch 的循环必须用 `StepsBar` 包裹并传入
 `epoch`，坐标（epoch / step）由它统一管理——`scalar()` / `log_group()` / `image()` /
 `audio()` 都**没有坐标参数**，记录自动依附当前 epoch 与下一个空槽：
 
 ```python
+from melog import StepsBar
+
 for epoch in range(epochs):
-    for _ in logger.stepsbar(loader, epoch=epoch):   # 行首自动标注 "epoch N"
+    for _ in StepsBar(loader, epoch=epoch):        # 行首自动标注 "epoch N"
         loss = train_one_step()
-        logger.scalar({"loss": loss, "lr": lr})      # 坐标自动依附当前 epoch
+        melog.scalar({"loss": loss, "lr": lr})     # 坐标自动依附当前 epoch
 ```
 
-- `stepsbar(epoch=...)` 进入进度条即绑定 epoch：epoch 内步数清零、全局 x 从上一位置
+- `StepsBar(epoch=...)` 进入进度条即绑定 epoch：epoch 内步数清零、全局 x 从上一位置
   接续；bar 结束后沿用绑定值，直至下一个 epoch
 - `step` 为**当前 epoch 内**的记录序号，内部自增（每个 epoch 从 0 重新计步）；
-  完全没用 `stepsbar(epoch=...)` 时退化为全局自增 x、不标注 epoch 分界
+  完全没用 `StepsBar(epoch=...)` 时退化为全局自增 x、不标注 epoch 分界
 - 要控制记录粒度（每步 / 每 N 步窗口），调整调用 `scalar()` 的频率即可，无需手动指定坐标
 - Web 曲线在每个 epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`
-- `MetricGroup` 末尾收尾直接 `logger.log_group(metrics, reset=True)`，epoch 沿用绑定值
+- `MetricGroup` 末尾收尾直接 `melog.log_group(metrics, reset=True)`，epoch 沿用绑定值
 
 ## 控制台消息
 
@@ -88,12 +91,10 @@ print 风格的控制台输出接口：多参数自动转 `str()`、以 `sep` �
 （支持 `sep` / `end` / `flush`）：
 
 ```python
-logger.log("普通消息", {"k": 1})   # 终端默认色（黑字），无前缀
-logger.success("保存完成")         # 绿色 ✔
-logger.error("加载失败")           # 红色 ✘
-logger.warn("学习率过大")          # 黄色 ⚠
-
-melog.log("...")                   # 模块级同样可用（需先 init）
+melog.log("普通消息", {"k": 1})   # 终端默认色（黑字），无前缀
+melog.success("保存完成")         # 绿色 ✔
+melog.error("加载失败")           # 红色 ✘
+melog.warn("学习率过大")          # 黄色 ⚠
 ```
 
 实例存活期间（仅 rank0），官方 `print(...)` 会被拦截内部改走 `log()`——普通打印
@@ -108,14 +109,14 @@ melog.log("...")                   # 模块级同样可用（需先 init）
 媒体一并恢复：
 
 ```python
-logger.scalar({"loss": loss})            # 坐标自动依附当前 epoch（stepsbar 绑定）
-logger.image("train/sample", img)        # 路径 / PIL / numpy / torch
-logger.image("val/sample", img)          # 自动附着最近一次 scalar()/log_group() 的位置
-logger.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
+melog.scalar({"loss": loss})            # 坐标自动依附当前 epoch（StepsBar 绑定）
+melog.image("train/sample", img)        # 路径 / PIL / numpy / torch
+melog.image("val/sample", img)          # 自动附着最近一次 scalar()/log_group() 的位置
+melog.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch 波形
 ```
 
 - 图像 / 音频自动附着到**最近一次 `scalar()` / `log_group()` 的位置**，不推进计数；
-  坐标（epoch / step）由 `stepsbar` 统一管理，接口无坐标参数
+  坐标（epoch / step）由 `StepsBar` 统一管理，接口无坐标参数
 - `caption="..."` 可为每条图像 / 音频配一段文字（如样本说明、转写文本），
   显示在卡片上、随滑杆切换；换行会被保留
 - 图像：`(H,W)` 灰度或 `(H,W,C)`（C=1/3/4），浮点自动映射 0-255，统一存为 PNG
@@ -129,9 +130,9 @@ logger.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch �
 
 ```python
 import melog
-from melog import Last, Mean, MetricGroup, Sum
+from melog import Last, Mean, MetricGroup, StepsBar, Sum
 
-logger = melog.init("runs/my-exp")
+melog.init("runs/my-exp")
 metrics = MetricGroup({
     "loss": Mean(),      # 各 batch 等权平均
     "acc": Mean(),
@@ -140,46 +141,46 @@ metrics = MetricGroup({
 })
 
 for epoch in range(epochs):
-    for _ in logger.stepsbar(range(steps), epoch=epoch):
+    for _ in StepsBar(range(steps), epoch=epoch):
         metrics.feed(loss=loss, acc=acc, seen=batch_size, lr=lr)  # 仅累积观测（内存），尚无输出
     # epoch 末必须记录：log_group = compute() 跨 GPU 合并 + 写日志/面板 + reset 清零；
     # 漏掉这步，指标只留在内存里，日志中不会出现
-    logger.log_group(metrics, reset=True)
+    melog.log_group(metrics, reset=True)
 ```
-
 - 默认各 batch **等权平均**，无需传 batch_size；多 GPU 下合并为全局等权平均，而非"各卡平均值的平均"
 - 各 batch 样本数不均（如最后一个不满 batch）、需要按样本 / token 精确加权时，
   传**元组** `(值, 权重)`：`metrics.feed(loss=(loss, token_num))`
 - `Mean` / `Sum` 可随时 `compute()`；**必须算完一个 epoch 才有意义的指标**，在 epoch 末统一调用 `compute()`（或 `log_group(..., reset=True)`）即可
 - `compute()` 是集合操作：**所有 rank 必须以相同顺序调用**，返回值各 rank 一致；单进程自动直通
-- `logger.log_group(group, reset=True)` 等价于 `logger.scalar(group.compute()); group.reset()`
-- 实时 + 精确一步到位：`logger.stepsbar(loader, epoch=e, metrics=metrics, reset=True)`——
+- `melog.log_group(group, reset=True)` 等价于 `melog.scalar(group.compute()); group.reset()`
+- 实时 + 精确一步到位：`StepsBar(loader, epoch=e, metrics=metrics, reset=True)`——
   训练中 bar 上实时显示**本卡本地值**（每次 feed 零通信刷新 postfix，NaN 自动跳过）；
   迭代自然结束时自动 gather 所有 rank 合并出**全局值**落盘（提前 break / 抛异常不触发，
   以免各 rank 在 all_gather 处互相等待；所有 rank 都会执行，落盘仅 rank0）
 
 ### feed 如何分发观测
 
-`metrics.feed(**batch)` 把一个 batch 的全部观测一次喂入，组内每个指标**各取所需**，
-分发规则按指标类型区分。以
+`metrics.feed(args=..., **scalars)` 把一个 batch 的观测一次喂入，两类指标
+**分开传、各取所需**。以
 
 ```python
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
-metrics.feed(logits=logits, labels=labels, mask=mask, loss=(loss, batch_size))
+metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
+             loss=(loss, batch_size))
 ```
 
 为例，一次 feed 内部的流转：
 
-- **标量指标**（`Mean` / `Sum` / `Last` / `Count`，如 `"loss"`）：按**注册名**到 batch 里
-  找同名键——取出 `batch["loss"] = (loss, batch_size)`；是元组就展开为
+- **`args=`：单批次指标**（`BatchMetric`，如 `"macc"` 与所有内置分类指标）的观测，
+  单独成组——**元组**按位置对应各指标 `compute_batch` 的形参
+  （`args=(logits, labels, mask)`），**字典**按键名对应形参（推荐，形参多时更可读）。
+  缺少必需形参才抛 `KeyError`，多余的键自动忽略。
+- **`**scalars`：标量指标**（`Mean` / `Sum` / `Last` / `Count`，如 `"loss"`）：按
+  **注册名**找同名键——取出 `loss=(loss, batch_size)`；是元组就展开为
   `feed(loss, batch_size)` 加权累积，普通数值则等权。本 batch 没有同名键就跳过
   （不累积也不报错）。
-- **单批次指标**（`BatchMetric`，如 `"macc"` 与所有内置分类指标）：拿到**整个 batch
-  字典**，按 `compute_batch` 声明的**形参名**自动取值——本例按
-  `compute_batch(self, logits, labels, mask)` 取出三个观测回调计算，多余的键
-  （`loss`）自动忽略；只有缺少必需形参才抛 `KeyError`。
 
-一句话：**标量指标按注册名"点名取值"，BatchMetric 按形参名"自己挑"**。两类规则
+一句话：**单批次指标的观测放 `args`，标量指标按注册名"点名取值"**。两类规则
 互不干扰，所以同一个 feed 调用可以同时喂两类指标；无主的多余观测两边都不收。
 
 单独使用某个指标时规则一致：标量指标位置喂入 `Mean().feed(value, weight)`；
@@ -202,9 +203,10 @@ metrics = MetricGroup({
 })
 
 for logits, labels in val_loader:
-    # feed：框架按各指标的形参名/注册名自动分发，无需逐个传 (logits, labels)
-    metrics.feed(logits=logits, labels=labels, loss=(loss, batch_size))
-logger.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
+    # feed：单批次指标的观测放 args（元组按位置 / 字典按键名），
+    # 标量指标按注册名喂入
+    metrics.feed(args=(logits, labels), loss=(loss, batch_size))
+melog.log_group(metrics, reset=True)  # epoch 末：跨 GPU 同步 + 记录 + 重置
 ```
 
 - `Accuracy(topk=k)`：真实类别在前 k 个预测中即算正确
@@ -240,13 +242,14 @@ metric.feed(logits=logits, labels=labels, mask=mask)
 ```python
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 
-# 每个 batch：feed 只把观测累积进各指标的内存状态（按形参名/注册名自动分发，
-# 元组 (值, 权重) 表示按 batch_size 加权），此时尚无任何输出
-metrics.feed(logits=logits, labels=labels, mask=mask, loss=(loss, batch_size))
+# 每个 batch：feed 只把观测累积进各指标的内存状态（单批次指标观测放 args，
+# 标量指标按注册名，元组 (值, 权重) 表示按 batch_size 加权），此时尚无任何输出
+metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
+             loss=(loss, batch_size))
 
 # epoch 末：log_group = compute() 跨 GPU 同步合并 + 写日志/推送面板 + reset 清零。
 # 不调用这步，指标只留在内存里——日志中不会出现，也不会归零开启下一轮
-logger.log_group(metrics, reset=True)
+melog.log_group(metrics, reset=True)
 ```
 
 **epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
@@ -294,7 +297,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `log_dir` | `./melog_runs` | 日志保存路径；本次运行落在其下时间戳子目录，末级目录名即项目名 |
-| `web_port` | 随机空闲端口 | Web 监听端口（`web_host` 默认 `127.0.0.1`，地址启动时自动打印，也可读 `logger.web_url`） |
+| `web_port` | 随机空闲端口 | Web 监听端口（`web_host` 默认 `127.0.0.1`，地址启动时自动打印，也可读 `melog.current().web_url`） |
 | `enable_web` | `True` | 启动 Web 服务（仅 rank0） |
 | `enable_progress` | `True` | 启用控制台进度条 |
 | `reduce_op` | `"mean"` | 多 GPU 合并方式 |
@@ -303,9 +306,9 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 ### 主要方法
 
-- `scalar(metrics, advance=0)` — 记录一批指标；坐标由 `stepsbar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
+- `scalar(metrics, advance=0)` — 记录一批指标；坐标由 `StepsBar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
 - `image(name, data, caption=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，自动附着最近一次记录位置，Web 端页签展示（见上文）
-- `stepsbar(iterable, epoch=None, metrics=None, reset=False)` — tqdm 风格进度条，**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值并 `log_group`（`reset=True` 记录后清零；提前 break / 异常不触发）（见上文）
+- `StepsBar(iterable, epoch=None, metrics=None, reset=False)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值并 `log_group`（`reset=True` 记录后清零；提前 break / 异常不触发）（见上文）
 - 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break 的 bar 请 `close()`（或用 with），否则一直留在栈中占位
 - `current_bar()` — 当前栈顶进度条（无打开的 bar 时 `None`）；深层函数需要手动推进 / 读数 / 写 postfix 时取它，免层层传参
 - `log / success / error / warn` — print 风格控制台消息（图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）
@@ -329,29 +332,41 @@ melog F:/runs/exp1 --port 9000 --no-browser  # 自定义端口 / 不开浏览器
 
 ```text
 melog/
-├── core.py          # Melog 主类：记录、调度、JSONL 落盘、媒体记录
-├── cli.py           # 命令行入口：melog <path>
-├── distributed.py   # 多 GPU all_reduce / all_gather 原语
-├── media.py         # 图像/音频落盘（路径复制或数组编码）
+├── __init__.py      # 包入口：公开 API 导出
+├── core.py          # Melog 主类：组合组件、调度记录、生命周期
+├── api/             # 全局入口 melog.init() + 模块级便捷接口（melog.scalar 等）
+├── cli/             # 命令行入口：melog <path>
+├── tracking/        # 训练记录上下文
+│   ├── axis.py      # Axis：全局 x / epoch 坐标的唯一裁决者
+│   ├── steps_bar.py # StepsBar：tqdm 风格训练进度条（epoch 绑定 + 自动记录）
+│   └── console.py   # Console：控制台消息（log/success/error/warn）+ print 拦截
+├── storage/         # 持久化与产物
+│   ├── journal.py   # Journal：JSONL 日志落盘（批量写 + 即时追加）
+│   ├── media.py     # 图像/音频落盘编码（路径复制或数组编码）
+│   ├── media_log.py # MediaLog：媒体记录流程（定位->落盘->索引->日志->推送）
+│   └── mirror.py    # Mirror：控制台日志镜像（进度条就地刷新 + stdio 接管）
 ├── metrics/         # 指标计算与跨 GPU 同步
 │   ├── base.py      # Metric / BatchMetric 基类（自定义指标继承其一）
 │   ├── basic.py     # Mean / Sum / Last / Count
 │   ├── classification.py  # Accuracy / Precision / Recall / F1 / ConfusionMatrix
 │   └── group.py     # MetricGroup：具名指标集合
-├── downsample.py    # 曲线降采样
-├── tqdm.py          # 自研进度条（tqdm 兼容，样式重设计）
-├── mirror.py        # 控制台日志镜像：进度条就地刷新 + stdio 接管
-└── web/
-    ├── server.py    # WebServer：uvicorn 线程生命周期
-    ├── app.py       # ApiRoutes：路由注册（指标/媒体/文件浏览/加载/WS）
-    ├── store.py     # MetricStore：内存指标历史
-    ├── view.py      # MetricView：实时/历史视图切换
-    ├── media_store.py  # MediaStore：实时媒体索引
-    ├── media_view.py   # MediaView：媒体视图切换 + 文件白名单解析
-    ├── fs.py        # FileBrowser：文件浏览
-    ├── loader.py    # LogLoader / MediaLoader：JSONL 解析
-    ├── ws.py        # WsHub：WebSocket 广播
-    └── static/      # 前端（js 按类分模块）
+├── web/             # Web 可视化面板
+│   ├── server.py    # WebServer：uvicorn 线程生命周期
+│   ├── app.py       # ApiRoutes：路由注册（指标/媒体/文件浏览/加载/WS）
+│   ├── store.py     # MetricStore：内存指标历史
+│   ├── view.py      # MetricView：实时/历史视图切换
+│   ├── media_store.py  # MediaStore：实时媒体索引
+│   ├── media_view.py   # MediaView：媒体视图切换 + 文件白名单解析
+│   ├── fs.py        # FileBrowser：文件浏览
+│   ├── loader.py    # LogLoader / MediaLoader：JSONL 解析
+│   ├── ws.py        # WsHub：WebSocket 广播
+│   └── static/      # 前端（js 按类分模块）
+└── utils/           # 通用工具类
+    ├── tqdm.py               # 自研进度条（tqdm 兼容，样式重设计）
+    ├── downsample.py         # 曲线降采样
+    ├── distributed.py        # 多 GPU all_reduce / all_gather 原语
+    ├── bar_stack.py          # BarStack / BarFrame：进度条栈帧管理（嵌套、恢复渲染）
+    └── epoch_end_iterable.py # EpochEndIterable：自然耗尽触发回调的迭代包装
 ```
 
 ## 开发

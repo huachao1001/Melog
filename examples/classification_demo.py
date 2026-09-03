@@ -24,7 +24,7 @@ import random
 import time
 
 import melog
-from melog import Accuracy, AUC, F1, Mean, MetricGroup, Recall
+from melog import Accuracy, AUC, F1, Mean, MetricGroup, Recall, StepsBar
 
 CLASSES = 4
 EPOCHS = 5        # epoch 数：log 时传入 epoch，曲线按 epoch 画分界线
@@ -56,9 +56,9 @@ def simulate_batch(step, rng):
 
 def main():
     rng = random.Random(7)
-    logger = melog.init("melog_runs/demo-multiclass")
+    melog.init("melog_runs/demo-multiclass")
     # 可选：为个别指标固定颜色（覆盖自动配色，其余仍按名称 hash 分配）
-    logger.set_colors({"recall/class_2": "#ef4444", "recall/class_3": "#94a3b8"})
+    melog.set_colors({"recall/class_2": "#ef4444", "recall/class_3": "#94a3b8"})
     print("重点看 recall / f1 / auc 三张多系列卡片，Ctrl+C 退出")
 
     metrics = MetricGroup(
@@ -74,16 +74,17 @@ def main():
     try:
         for epoch in range(EPOCHS):
             # 每个 epoch 一条进度条并绑定 epoch；坐标（epoch/step）自动管理
-            for step in logger.stepsbar(range(STEPS), epoch=epoch):
+            for step in StepsBar(range(STEPS), epoch=epoch):
                 g = epoch * STEPS + step  # 全局步数：模型能力按它增长
                 logits, labels = simulate_batch(g, rng)
                 loss = 1.8 * math.exp(-g / 180) + 0.4 + rng.gauss(0, 0.02)
-                metrics.feed(logits=logits, labels=labels, loss=(loss, len(labels)))
+                # 标量指标按注册名喂入；分类指标的观测单独放进 args（按位置对应）
+                metrics.feed(args=(logits, labels), loss=(loss, len(labels)))
                 if step % LOG_EVERY == LOG_EVERY - 1:
                     out = metrics.compute()
                     # 窗口内个别类可能无样本（NaN），跳过不记录，曲线稍后补上
                     # 记录自动依附当前 epoch 与下一个空槽
-                    logger.scalar({k: v for k, v in out.items() if v == v})
+                    melog.scalar({k: v for k, v in out.items() if v == v})
                     metrics.reset()
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:

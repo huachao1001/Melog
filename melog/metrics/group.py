@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
-from ..distributed import gather_object
+from ..utils.distributed import gather_object
 from .base import BatchMetric, Metric
 
 __all__ = ["MetricGroup"]
@@ -17,17 +17,18 @@ class MetricGroup:
 
         metrics = MetricGroup({"loss": Mean(), "acc": Accuracy()})
 
-        # 每个 batch（所有 rank 都执行）：按形参名/注册名自动分发
-        metrics.feed(logits=logits, labels=labels, loss=loss, n=1)
+        # 每个 batch（所有 rank 都执行）：标量按注册名喂入，
+        # 单批次指标的观测单独放进 args（元组按位置 / 字典按键名）
+        metrics.feed(args={"logits": logits, "labels": labels}, loss=loss, n=1)
 
         # epoch 末：一次同步合并全部，返回全局结果，可直接记录
-        logger.scalar(metrics.compute())
+        melog.scalar(metrics.compute())
         metrics.reset()   # 开启新一轮统计
     """
 
     def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
         self._metrics: Dict[str, Metric] = dict(metrics or {})
-        # 每次 feed() 后触发的回调（由 logger 挂载，用于进度条实时显示本地值）
+        # 每次 feed() 后触发的回调（由 StepsBar 挂载，用于进度条实时显示本地值）
         self._on_feed: Optional[Callable[[], None]] = None
 
     def add(self, name: str, metric: Metric) -> "MetricGroup":
@@ -36,18 +37,26 @@ class MetricGroup:
         self._metrics[name] = metric
         return self
 
-    def feed(self, **batch: Any) -> None:
+    def feed(self, args: Optional[Union[Tuple, Dict]] = None, **batch: Any) -> None:
         """把一个 batch 的全部观测喂给整组指标，分发由框架完成。
 
-        - BatchMetric（分类指标及同型自定义指标）：按各指标 compute_batch
-          声明的形参名自动取值，形参名任意（logits / labels 仅为示例），
-          多余的键自动忽略
-        - 其余指标：按注册名取 batch 中的同名观测（带权重传元组，
-          如 loss=(3.2, batch_size)）；batch 中没有的名字本 batch 不累积
+        Args:
+            args: 单批次指标（BatchMetric，如分类指标与自定义
+                compute_batch 指标）的观测，单独成组传入：
+                - 元组：按位置对应各指标 compute_batch 的形参
+                - 字典：按键名对应 compute_batch 的形参名（推荐，
+                  形参多时更可读）
+                组内没有单批次指标时可不传。
+            **batch: 标量指标（Mean / Sum / Last / Count）的观测，按
+                注册名取同名键（带权重传元组，如 loss=(3.2, batch_size)）；
+                没有同名键就跳过（不累积也不报错）。
         """
         for name, metric in self._metrics.items():
             if isinstance(metric, BatchMetric):
-                metric.feed(**batch)
+                if isinstance(args, dict):
+                    metric.feed(**args)
+                elif args is not None:
+                    metric.feed(*args)
             elif name in batch:
                 value = batch[name]
                 if isinstance(value, tuple):
@@ -69,7 +78,7 @@ class MetricGroup:
         """同步合并组内全部指标并返回全局结果。
 
         所有 rank 必须以相同顺序调用（一次 all_gather 完成全部同步），
-        返回值在各 rank 上一致，可直接交给 logger.scalar()。
+        返回值在各 rank 上一致，可直接交给 melog.scalar()。
         """
         names = list(self._metrics)
         states = gather_object([self._metrics[name].state() for name in names])

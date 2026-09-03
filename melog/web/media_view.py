@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Optional, Union
 
-from ..media import media_url
+from ..storage.media import media_url
 from .media_store import MediaStore
 
 MediaIndex = Dict[str, Dict[str, list]]  # {kind: {name: [entry, ...]}}

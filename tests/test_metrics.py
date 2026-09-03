@@ -5,8 +5,9 @@ import json
 
 import pytest
 
+from melog import StepsBar
 from melog.core import Melog
-from melog.distributed import gather_object
+from melog.utils.distributed import gather_object
 from melog.metrics import (
     Accuracy,
     BatchMetric,
@@ -181,11 +182,20 @@ def test_batch_metric_merge_across_ranks(monkeypatch):
 
 def test_group_feed_dispatch():
     group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
-    # acc 按形参名自动取 logits/labels；loss 按注册名取值（元组 = 值 + 权重）
-    group.feed(logits=[0.9, 0.2], labels=[1, 0], loss=(1.0, 2))
+    # acc 按形参名/位置从 args 取 logits/labels；loss 按注册名取值（元组 = 值 + 权重）
+    group.feed(args=([0.9, 0.2], [1, 0]), loss=(1.0, 2))
     out = group.compute()
     assert out["acc"] == pytest.approx(1.0)
     assert out["loss"] == pytest.approx(1.0)
+
+
+def test_group_feed_args_dict():
+    """args 传字典：按键名对应 compute_batch 形参，多余的键自动忽略。"""
+    group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
+    group.feed(args={"logits": [0.9, 0.2], "labels": [1, 0], "extra": 1}, loss=0.5)
+    out = group.compute()
+    assert out["acc"] == pytest.approx(1.0)
+    assert out["loss"] == pytest.approx(0.5)
 
 
 def test_group_feed_partial_scalars():
@@ -205,7 +215,7 @@ def test_group_local_no_gather(monkeypatch):
 
     monkeypatch.setattr("melog.metrics.group.gather_object", boom)
     group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
-    group.feed(loss=(2.0, 2.0), logits=[0.9, 0.2], labels=[1, 0])
+    group.feed(args=([0.9, 0.2], [1, 0]), loss=(2.0, 2.0))
     out = group.local()
     assert out["loss"] == pytest.approx(2.0)
     assert out["acc"] == pytest.approx(1.0)
@@ -214,8 +224,8 @@ def test_group_local_no_gather(monkeypatch):
 def test_batch_metric_with_melog(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"acc": PairAcc()})
-    for _ in lg.stepsbar(range(2)):
-        group.feed(logits=[0.9, 0.2], labels=[1, 0])
+    for _ in StepsBar(range(2)):
+        group.feed(args=([0.9, 0.2], [1, 0]))
         lg.log_group(group, reset=True)
     lg.close()
 
@@ -326,7 +336,7 @@ def test_group_getitem_contains_len():
 def test_log_group_records_and_resets(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
-    bar = lg.stepsbar(range(4))  # 建条但不迭代
+    bar = StepsBar(range(4))  # 建条但不迭代
     for _ in range(2):
         group.feed(loss=1.0, acc=0.5)
         lg.log_group(group, reset=True)

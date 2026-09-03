@@ -7,8 +7,8 @@
 - 音频页签：sample/tone 卡片——播放随训练由沙哑变纯净的音色
 
 媒体接口（坐标自动依附最近一次 scalar() / log_group() 的记录处，本示例即这种用法）：
-    logger.image("名字", 图片路径/PIL/numpy/torch, caption=配文)
-    logger.audio("名字", 音频路径/numpy/torch, sr=采样率, caption=配文)
+    melog.image("名字", 图片路径/PIL/numpy/torch, caption=配文)
+    melog.audio("名字", 音频路径/numpy/torch, sr=采样率, caption=配文)
 
 Ctrl+C 停止。
 """
@@ -19,6 +19,7 @@ import time
 import numpy as np
 
 import melog
+from melog import StepsBar
 
 EPOCHS = 3
 STEPS = 40        # 每个 epoch 步数
@@ -52,25 +53,25 @@ def make_audio(step: int, total: int, sr: int = 22050) -> np.ndarray:
 
 
 def main():
-    logger = melog.init("melog_runs/demo-media")   # 日志保存路径；Web 地址启动时自动打印
+    melog.init("melog_runs/demo-media")   # 日志保存路径；Web 地址启动时自动打印
     print("页签切换 曲线/图像/音频，Ctrl+C 退出")
 
     total = EPOCHS * STEPS
     try:
         for epoch in range(EPOCHS):
             # tqdm 风格：包裹可迭代对象即自动推进，scalar() 指标实时显示在条上；
-            # epoch 交给 stepsbar 绑定，曲线自动标注 epoch 分界
-            for step in logger.stepsbar(range(STEPS), epoch=epoch):
+            # epoch 交给 StepsBar 绑定，曲线自动标注 epoch 分界
+            for step in StepsBar(range(STEPS), epoch=epoch):
                 g = epoch * STEPS + step
                 loss = 1.6 * math.exp(-g / 80) + 0.2
-                logger.scalar({"loss": loss})
+                melog.scalar({"loss": loss})
                 if g % IMG_EVERY == 0:
                     # caption：随图显示的配文（textContent 渲染，支持换行）
-                    logger.image("sample/grid", make_image(g, total),
-                                   caption=f"亮斑位置 t={g / total:.2f}（应逐渐移向中心）")
+                    melog.image("sample/grid", make_image(g, total),
+                                caption=f"亮斑位置 t={g / total:.2f}（应逐渐移向中心）")
                 if g % AUD_EVERY == 0:
-                    logger.audio("sample/tone", make_audio(g, total), sr=22050,
-                                   caption=f"纯净度 {g / total:.0%}，噪声已衰减")
+                    melog.audio("sample/tone", make_audio(g, total), sr=22050,
+                                caption=f"纯净度 {g / total:.0%}，噪声已衰减")
                 time.sleep(INTERVAL)
     except KeyboardInterrupt:
         print("\n手动停止")

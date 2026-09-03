@@ -2,7 +2,7 @@
 
 import pytest
 
-from melog.downsample import downsample
+from melog.utils.downsample import downsample
 
 
 def test_no_downsample_under_threshold():

@@ -1,8 +1,7 @@
 """Melog 包入口。"""
 
-"""Melog 包入口。"""
-
-from .core import (
+from .api import (
+    StepsBar,
     audio,
     current,
     current_bar,
@@ -13,6 +12,7 @@ from .core import (
     log_group,
     scalar,
     set_colors,
+    stepsbar,
     success,
     tqdm,
     warn,
@@ -39,6 +39,8 @@ __all__ = [
     "current",
     "current_bar",
     "tqdm",
+    "StepsBar",
+    "stepsbar",
     "scalar",
     "log",
     "log_group",

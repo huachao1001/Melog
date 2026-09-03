@@ -17,7 +17,7 @@ import math
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
 
-from ..distributed import gather_object
+from ..utils.distributed import gather_object
 
 __all__ = ["Metric", "BatchMetric"]
 

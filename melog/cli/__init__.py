@@ -14,10 +14,10 @@ import time
 import webbrowser
 from pathlib import Path
 
-from .web.fs import FileBrowser
-from .web.loader import LogLoader
-from .web.server import WebServer
-from .web.store import MetricStore
+from ..web.fs import FileBrowser
+from ..web.loader import LogLoader
+from ..web.server import WebServer
+from ..web.store import MetricStore
 
 
 def _resolve_log_file(path: Path) -> Path:

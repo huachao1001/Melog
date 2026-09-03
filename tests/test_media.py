@@ -5,8 +5,9 @@ import wave
 
 import pytest
 
+from melog import StepsBar
 from melog.core import Melog
-from melog.media import read_wav_info, sanitize_name, save_audio, save_image
+from melog.storage.media import read_wav_info, sanitize_name, save_audio, save_image
 from melog.web.loader import LogLoader, MediaLoader
 from melog.web.media_store import MediaStore
 from melog.web.media_view import MediaView
@@ -213,103 +214,103 @@ def test_media_view_loaded_switch(tmp_path):
 
 # ---------------------------------------------------------------- Melog 接口
 @pytest.fixture
-def logger(tmp_path):
-    lg = Melog(project="m", output_dir=str(tmp_path), enable_web=False)
-    yield lg
-    lg.close()
+def lg(tmp_path):
+    m = Melog(project="m", output_dir=str(tmp_path), enable_web=False)
+    yield m
+    m.close()
 
 
-def test_image_attaches_to_last_scalar_position(logger):
-    for _ in logger.stepsbar(range(1), epoch=2):
-        logger.scalar({"loss": 1.0})  # x=0, epoch 2
-    logger.image("pred", np.zeros((4, 4), dtype=np.uint8))
-    entries = logger.media.snapshot()["image"]["pred"]
+def test_image_attaches_to_last_scalar_position(lg):
+    for _ in StepsBar(range(1), epoch=2):
+        lg.scalar({"loss": 1.0})  # x=0, epoch 2
+    lg.image("pred", np.zeros((4, 4), dtype=np.uint8))
+    entries = lg.media.snapshot()["image"]["pred"]
     assert entries[0]["step"] == 0 and entries[0]["epoch"] == 2
     # 附着不推进 step 计数
-    logger.scalar({"loss": 2.0})
-    assert logger.store.snapshot()["loss"][-1]["step"] == 1
+    lg.scalar({"loss": 2.0})
+    assert lg.store.snapshot()["loss"][-1]["step"] == 1
 
 
-def test_media_attach_position_and_files(logger):
-    logger.scalar({"loss": 1.0})
-    logger.scalar({"loss": 2.0})
+def test_media_attach_position_and_files(lg):
+    lg.scalar({"loss": 1.0})
+    lg.scalar({"loss": 2.0})
     img = np.full((3, 3, 3), 200, dtype=np.uint8)
     audio = np.zeros(100, dtype=np.float64)
-    logger.image("sample/a", img)
-    logger.audio("sample/a", audio, sr=8000)
+    lg.image("sample/a", img)
+    lg.audio("sample/a", audio, sr=8000)
 
-    media_root = logger.run_dir / "media"
+    media_root = lg.run_dir / "media"
     assert (media_root / "image/sample/a/000000001.png").is_file()
     assert (media_root / "audio/sample/a/000000001.wav").is_file()
 
-    recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
+    recs = [json.loads(l) for l in lg._log_file.read_text(encoding="utf-8").splitlines()]
     img_rec = next(r for r in recs if r.get("type") == "image")
     aud_rec = next(r for r in recs if r.get("type") == "audio")
     assert img_rec == {"type": "image", "metric": "sample/a", "step": 1,
                        "file": "media/image/sample/a/000000001.png"}
     assert aud_rec["type"] == "audio" and aud_rec["sr"] == 8000
 
-    snap = logger.media.snapshot()
+    snap = lg.media.snapshot()
     assert snap["image"]["sample/a"][0]["file"] == "media/image/sample/a/000000001.png"
     assert snap["audio"]["sample/a"][0]["sr"] == 8000
 
 
-def test_media_before_any_scalar_defaults_to_zero(logger):
-    logger.image("early", np.zeros((2, 2), dtype=np.uint8))
-    entries = logger.media.snapshot()["image"]["early"]
+def test_media_before_any_scalar_defaults_to_zero(lg):
+    lg.image("early", np.zeros((2, 2), dtype=np.uint8))
+    entries = lg.media.snapshot()["image"]["early"]
     assert entries[0]["step"] == 0 and "epoch" not in entries[0]
 
 
-def test_media_attaches_to_bound_epoch_position(logger):
+def test_media_attaches_to_bound_epoch_position(lg):
     """epoch 模式下媒体附着最近一次提交位置：x = epoch 基准 + epoch 内步数。"""
-    for _ in logger.stepsbar(range(2), epoch=0):
-        logger.scalar({"loss": 1.0})  # epoch0: x=0,1
-    for _ in logger.stepsbar(range(1), epoch=1):
-        logger.scalar({"loss": 1.0})  # epoch1 基准 2 → x=2
-    logger.image("pred", np.zeros((2, 2), dtype=np.uint8))
-    entry = logger.media.snapshot()["image"]["pred"][0]
+    for _ in StepsBar(range(2), epoch=0):
+        lg.scalar({"loss": 1.0})  # epoch0: x=0,1
+    for _ in StepsBar(range(1), epoch=1):
+        lg.scalar({"loss": 1.0})  # epoch1 基准 2 → x=2
+    lg.image("pred", np.zeros((2, 2), dtype=np.uint8))
+    entry = lg.media.snapshot()["image"]["pred"][0]
     assert entry["step"] == 2 and entry["epoch"] == 1
     # 附着不推进任何计数器：下一次 scalar 仍在 epoch1 的下一空槽
-    logger.scalar({"loss": 2.0})
-    rec = logger.store.snapshot()["loss"][-1]
+    lg.scalar({"loss": 2.0})
+    rec = lg.store.snapshot()["loss"][-1]
     assert rec["step"] == 3 and rec["epoch"] == 1
 
 
-def test_media_caption_roundtrip(logger):
+def test_media_caption_roundtrip(lg):
     """caption 随记录贯通：journal / 内存索引 / 历史解析；无配文则不写该字段。"""
-    logger.scalar({"loss": 1.0})  # 提交 x=0
-    logger.image("cap/img", np.zeros((2, 2), dtype=np.uint8), caption="第一张\n说明文字")
-    logger.scalar({"loss": 2.0})  # 提交 x=1，两张图落在不同 step
-    logger.image("cap/img", np.ones((2, 2), dtype=np.uint8))
-    logger.audio("cap/tone", np.zeros(10), sr=8000, caption="转写文本")
+    lg.scalar({"loss": 1.0})  # 提交 x=0
+    lg.image("cap/img", np.zeros((2, 2), dtype=np.uint8), caption="第一张\n说明文字")
+    lg.scalar({"loss": 2.0})  # 提交 x=1，两张图落在不同 step
+    lg.image("cap/img", np.ones((2, 2), dtype=np.uint8))
+    lg.audio("cap/tone", np.zeros(10), sr=8000, caption="转写文本")
 
-    recs = [json.loads(l) for l in logger._log_file.read_text(encoding="utf-8").splitlines()]
+    recs = [json.loads(l) for l in lg._log_file.read_text(encoding="utf-8").splitlines()]
     media_recs = [r for r in recs if "type" in r]
     assert media_recs[0]["caption"] == "第一张\n说明文字"
     assert "caption" not in media_recs[1]  # 无配文的条目不带该字段
     assert media_recs[2]["caption"] == "转写文本"
 
-    snap = logger.media.snapshot()
+    snap = lg.media.snapshot()
     assert snap["image"]["cap/img"][0]["caption"] == "第一张\n说明文字"
     assert "caption" not in snap["image"]["cap/img"][1]
 
-    parsed = MediaLoader.parse(logger._log_file)
+    parsed = MediaLoader.parse(lg._log_file)
     assert parsed["image"]["cap/img"][0]["caption"] == "第一张\n说明文字"
     assert "caption" not in parsed["image"]["cap/img"][1]
     assert parsed["audio"]["cap/tone"][0]["caption"] == "转写文本"
 
 
-def test_media_path_copy(logger, tmp_path):
+def test_media_path_copy(lg, tmp_path):
     from PIL import Image
 
     src = tmp_path / "in.png"
     Image.new("L", (4, 4)).save(src)
-    logger.image("copied", src)
-    assert (logger.run_dir / "media/image/copied/000000000.png").is_file()
+    lg.image("copied", src)
+    assert (lg.run_dir / "media/image/copied/000000000.png").is_file()
 
 
-def test_media_bad_name_rejected(logger):
-    from melog.media import sanitize_name
+def test_media_bad_name_rejected(lg):
+    from melog.storage.media import sanitize_name
 
     with pytest.raises(ValueError):
         sanitize_name("")

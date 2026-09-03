@@ -15,8 +15,8 @@ import os
 import time
 
 import melog
-from melog import Last, Mean, MetricGroup, Sum
-from melog.distributed import get_rank, get_world_size, is_distributed
+from melog import Last, Mean, MetricGroup, StepsBar, Sum
+from melog.utils.distributed import get_rank, get_world_size, is_distributed
 
 STEPS = 200
 EPOCHS = 3
@@ -24,10 +24,11 @@ EPOCHS = 3
 
 def main():
     rank = get_rank()
-    logger = melog.init("melog_runs/demo-multi")
+    melog.init("melog_runs/demo-multi")
 
     if rank == 0:
-        ws = f", Web: {logger.web_url}" if logger.web_url else ""
+        url = melog.current().web_url
+        ws = f", Web: {url}" if url else ""
         print(f"world_size={get_world_size()} 分布式={is_distributed()}{ws}")
 
     metrics = MetricGroup(
@@ -42,7 +43,7 @@ def main():
     for epoch in range(EPOCHS):
         # metrics=...：bar 实时显示本卡本地值（零通信）；迭代自然结束时
         # gather 合并全局值落盘并 reset（提前 break / 异常不触发）
-        for step in logger.stepsbar(range(STEPS), epoch=epoch, metrics=metrics, reset=True):
+        for step in StepsBar(range(STEPS), epoch=epoch, metrics=metrics, reset=True):
             # 模拟各 GPU 有差异的本地观测
             base = 2.0 * math.exp(-step / 60) + 0.05
             local_loss = base + 0.01 * (rank + 1) * math.sin(step / 9 + rank)
@@ -58,7 +59,7 @@ def main():
             time.sleep(0.02)
 
     if rank == 0:
-        print(f"指标已落盘: {logger.run_dir / 'metrics.melog'}")
+        print(f"指标已落盘: {melog.current().run_dir / 'metrics.melog'}")
 
 
 if __name__ == "__main__":

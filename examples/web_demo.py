@@ -10,21 +10,22 @@ import random
 import time
 
 import melog
+from melog import StepsBar
 
 STEPS = 3000       # 足够长，方便观察
 INTERVAL = 0.5     # 每 0.5s 推送一次
 
 
 def main():
-    logger = melog.init("melog_runs/web-demo")
+    melog.init("melog_runs/web-demo")
     print("浏览器打开查看实时曲线，Ctrl+C 退出")
 
     try:
-        for step in logger.stepsbar(range(STEPS)):
+        for step in StepsBar(range(STEPS)):
             loss = 2.0 * math.exp(-step / 150) + 0.05 + 0.02 * math.sin(step / 11) + random.uniform(-0.01, 0.01)
             acc = min(0.99, 1 - loss / 2.1 + random.uniform(-0.005, 0.005))
             grad_norm = 1.0 * math.exp(-step / 300) + random.uniform(0, 0.2)
-            logger.scalar({
+            melog.scalar({
                 "loss": loss,
                 "acc": acc,
                 "lr": 1e-3 * (0.995 ** step),

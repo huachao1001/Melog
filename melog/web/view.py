@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from ..downsample import downsample
+from ..utils.downsample import downsample
 from .store import MetricStore
 
 Point = Tuple[int, float, Optional[int]]

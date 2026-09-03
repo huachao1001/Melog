@@ -10,7 +10,6 @@ from melog.core import Melog
 from melog.utils.distributed import gather_object
 from melog.metrics import (
     Accuracy,
-    BatchMetric,
     Count,
     Last,
     Mean,
@@ -95,11 +94,11 @@ def test_custom_metric_epoch_level():
     assert acc.result() == pytest.approx(0.5)
 
 
-# ---------------------------------------------------------------- 单批次指标（BatchMetric）
-class PairAcc(BatchMetric):
-    """单批次自定义指标示例：只实现 compute_batch，其余交给框架。"""
+# ---------------------------------------------------------------- 实时指标（只实现 compute）
+class PairAcc(Metric):
+    """实时自定义指标示例：只实现 compute，其余交给框架。"""
 
-    def compute_batch(self, logits, labels):
+    def compute(self, logits, labels):
         preds = [1 if float(x) >= 0.5 else 0 for x in logits]
         hits = sum(1 for p, t in zip(preds, labels) if p == int(t))
         return (hits / len(labels), float(len(labels))) if labels else (0.0, 0.0)
@@ -122,8 +121,8 @@ def test_batch_metric_empty_and_reset():
 
 
 def test_batch_metric_custom_count():
-    class W(BatchMetric):
-        def compute_batch(self, value, count):  # 形参名任意，框架按名取值
+    class W(Metric):
+        def compute(self, value, count):  # 形参名任意，框架按名取值
             return (float(value), float(count))
 
     w = W()
@@ -133,9 +132,9 @@ def test_batch_metric_custom_count():
 
 
 def test_batch_metric_multiple_params():
-        class MaskedAcc(BatchMetric):
+        class MaskedAcc(Metric):
             # 需要几个参数就声明几个，名字任意；多余观测自动忽略
-            def compute_batch(self, logits, labels, mask):
+            def compute(self, logits, labels, mask):
                 vals = [
                     1.0 if int(t) == (1 if float(x) >= 0.5 else 0) else 0.0
                     for x, t, m in zip(logits, labels, mask)
@@ -177,7 +176,7 @@ def test_group_feed_dispatch():
 
 
 def test_group_feed_args_dict():
-    """args 传字典：按键名对应 compute_batch 形参，多余的键自动忽略。"""
+    """args 传字典：按键名对应 compute 形参，多余的键自动忽略。"""
     group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
     group.feed(args={"logits": [0.9, 0.2], "labels": [1, 0], "extra": 1}, loss=0.5)
     out = group._compute()
@@ -227,10 +226,10 @@ def test_batch_metric_with_melog(tmp_path):
 
 # ---------------------------------------------------------------- 多 rank 合并逻辑
 def test_group_merge_across_ranks(monkeypatch):
-    # 模拟 2 个 rank 的状态：rank0 loss sum=4/count=2，rank1 sum=1/count=1
+    # 模拟 2 个 rank 的状态：rank0 loss total=4/count=2，rank1 total=1/count=1
     def fake_gather(states):
         # states 是本 rank 各指标的 state 列表，返回按 rank 排列的收集结果
-        return [states, [dict(s) for s in states]]
+        return [states, [list(s) for s in states]]
 
     monkeypatch.setattr("melog.metrics.group.gather_object", fake_gather)
 
@@ -244,7 +243,7 @@ def test_group_merge_across_ranks(monkeypatch):
 def test_metric_merge_states_multi_rank(monkeypatch):
     # rank0: total=4, count=2；rank1: total=1, count=1 -> 全局 5/3
     def fake_gather(states):
-        other = {"total": 1.0, "count": 1.0}
+        other = [1.0, 1.0]
         return [states, other]
 
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)

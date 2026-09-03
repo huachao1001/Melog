@@ -178,21 +178,22 @@ metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
 
 为例，一次 feed 内部的流转：
 
-- **`args=`：单批次指标**（`BatchMetric`，如 `"macc"` 与所有内置分类指标）的观测，
-  单独成组——**元组**按位置对应各指标 `compute_batch` 的形参
-  （`args=(logits, labels, mask)`），**字典**按键名对应形参（推荐，形参多时更可读）。
-  缺少必需形参才抛 `KeyError`，多余的键自动忽略。
-- **`**scalars`：标量指标**（`Mean` / `Sum` / `Last` / `Count`，如 `"loss"`）：按
-  **注册名**找同名键——取出 `loss=(loss, batch_size)`；是元组就展开为
+- **`args=`：观测型指标**（如 `"macc"` 与所有内置分类指标）的观测，
+  单独成组——**字典**按键名对应各指标 `compute` / `prepare` 的形参
+  （推荐，形参多时更可读），自动分发给形参名匹配的指标，多余的键忽略；
+  **元组**按位置喂给未被注册名喂入的指标。
+  缺少必需形参才抛 `KeyError`。
+- **`**scalars`：按注册名喂入的指标**（`Mean` / `Sum` / `Last` / `Count`，如 `"loss"`）：
+  按**注册名**找同名键——取出 `loss=(loss, batch_size)`；是元组就展开为
   `feed(loss, batch_size)` 加权累积，普通数值则等权。本 batch 没有同名键就跳过
   （不累积也不报错）。
 
-一句话：**单批次指标的观测放 `args`，标量指标按注册名"点名取值"**。两类规则
+一句话：**观测型指标的观测放 `args`，标量指标按注册名"点名取值"**。两类规则
 互不干扰，所以同一个 feed 调用可以同时喂两类指标；无主的多余观测两边都不收。
 
 单独使用某个指标时规则一致：标量指标位置喂入 `Mean().feed(value, count)`；
-BatchMetric 具名或位置均可 `MaskedAcc().feed(logits=..., labels=..., mask=...)`，
-框架同样按 `compute_batch` 形参名组装。
+观测型指标具名或位置均可 `MaskedAcc().feed(logits=..., labels=..., mask=...)`，
+框架同样按 `compute` / `prepare` 形参名组装。
 
 ### 分类指标
 
@@ -211,7 +212,7 @@ metrics = MetricGroup({
 
 # 验证集：write=False 不逐 batch 写曲线，epoch 末自动跨 GPU 合并记录
 for logits, labels in StepsBar(val_loader, epoch=epoch, metrics=val_metrics):
-    # feed：单批次指标的观测放 args（元组按位置 / 字典按键名），
+    # feed：观测型指标的观测放 args（元组按位置 / 字典按键名），
     # 标量指标按注册名喂入（loss 自动按批次样本数平均）
     val_metrics.feed(args=(logits, labels), loss=loss, write=False)
 # 无需手动 scalar：StepsBar 结束时自动合并记录并 reset
@@ -224,16 +225,18 @@ for logits, labels in StepsBar(val_loader, epoch=epoch, metrics=val_metrics):
 
 ### 自定义指标
 
-**单批次指标（推荐）**：继承 `BatchMetric`，只实现 `compute_batch()` 一个函数。
+统一继承 `Metric`，按指标何时出值选择实现方式：
+
+**实时指标——只实现 `compute()`**：每次喂入立即用本批观测算出指标值，
 形参名和个数完全由你定义，框架按形参名自动从 `feed()` 的观测中取值回调；
-累积、跨 GPU 合并、reset 全部由框架完成：
+各 batch 结果按观测数加权平均、跨 GPU 合并，全部由框架完成：
 
 ```python
-from melog import BatchMetric
+from melog import Metric
 
-class MaskedAcc(BatchMetric):
+class MaskedAcc(Metric):
     """需要几个参数就声明几个，logits/labels 仅为示例。"""
-    def compute_batch(self, logits, labels, mask):
+    def compute(self, logits, labels, mask):
         hits = ((logits.argmax(-1) == labels) & mask).sum()
         n = mask.sum()
         return (hits / n, n)          # 返回 (值, 观测数)：按样本数平均出全局结果
@@ -243,7 +246,7 @@ metric.feed(logits, labels, mask)
 metric.feed(logits=logits, labels=labels, mask=mask)
 ```
 
-- `compute_batch` 返回 `(值, 观测数)` 元组：各 batch 按观测数（如样本数）平均（样本数不同时务必带上）；
+- `compute` 返回 `(值, 观测数)` 元组：各 batch 按观测数（如样本数）平均（样本数不同时务必带上）；
   只返回 float 时各 batch 等权平均
 - 组合使用时交给 `MetricGroup.feed(...)` 统一分发：
 
@@ -251,7 +254,7 @@ metric.feed(logits=logits, labels=labels, mask=mask)
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 
 # 每个 batch：feed 把观测累积进各指标的内存状态并自动记录本卡实时值
-# （单批次指标观测放 args，标量指标按注册名，Mean 自动按批次样本数平均）
+# （观测型指标观测放 args，标量指标按注册名，Mean 自动按批次样本数平均）
 for logits, labels, mask in StepsBar(loader, epoch=epoch, metrics=metrics):
     metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
                  loss=loss)
@@ -262,17 +265,18 @@ for logits, labels, mask in StepsBar(loader, epoch=epoch, metrics=metrics):
 不用 StepsBar 包裹时（如独立验证脚本）才需要手动落盘：
 `melog.scalar(metrics)` 跨 GPU 合并记录，`metrics.reset()` 清零开启下一轮。
 
-**epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
-继承 `Metric` 只写两个纯函数——`update()` 返回本批次贡献的增量，
-`compute()` 由合并后的总量算出全局结果；增量怎么累积、怎么跨 GPU 合并
-（数值求和 / 字典按键合并 / 列表拼接）全部由框架自动完成，无需感知多卡：
+**epoch 级指标——加实现 `prepare()`**：全局结果无法由各 batch 值加权平均还原时
+（如 macro F1、AUC），每次喂入先用 `prepare()`"备料"——接收同样的观测，
+返回本批次贡献的增量（数值 / 字典 / 列表），框架自动累积并跨 GPU 合并
+（数值求和、字典按键合并、列表拼接）；epoch 末把合并后的总量交给
+`compute()` 算出全局结果：
 
 ```python
 from melog import Metric
 
 class F1(Metric):
     """epoch 末才能计算的指标：累积混淆计数，末尾统一算。"""
-    def update(self, tp, fp, fn):       # 每个 batch：本批次贡献的计数
+    def prepare(self, tp, fp, fn):      # 每个 batch：本批次贡献的计数
         return {"tp": tp, "fp": fp, "fn": fn}
 
     def compute(self, tp, fp, fn):      # epoch 末：由总量算出全局值
@@ -352,7 +356,7 @@ melog/
 │   ├── media_log.py # MediaLog：媒体记录流程（定位->落盘->索引->日志->推送）
 │   └── mirror.py    # Mirror：控制台日志镜像（进度条就地刷新 + stdio 接管）
 ├── metrics/         # 指标计算与跨 GPU 同步
-│   ├── base.py      # Metric / BatchMetric 基类（自定义指标继承其一）
+│   ├── base.py      # Metric 基类：compute 实时出值 / prepare+compute epoch 出值
 │   ├── basic.py     # Mean / Sum / Last / Count
 │   ├── classification.py  # Accuracy / Precision / Recall / F1 / ConfusionMatrix
 │   └── group.py     # MetricGroup：具名指标集合

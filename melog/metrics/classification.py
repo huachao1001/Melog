@@ -1,10 +1,8 @@
 """内置分类指标：Accuracy / Precision / Recall / F1 / ConfusionMatrix / AUC。
 
-Accuracy 继承 BatchMetric：框架把每个 batch 的 logits 与 labels 回调给
-compute_batch，累积、跨 GPU 合并、reset 由框架完成。
-Precision / Recall / F1 / ConfusionMatrix / AUC 继承 Metric：update 返回
-本批次增量（预测对计数 / 得分对），compute 由合并后的总量算全局结果，
-同样无需感知多卡。
+均继承 Metric：Accuracy 为实时指标（compute 单 batch 出值）；其余为
+epoch 级指标（prepare 备料、compute 由总量出全局结果）。框架按形参名
+传入观测并完成累积与跨 GPU 合并。
 logits -> 预测类别的转换由预测函数完成（默认 preds_from_logits，
 可通过 predictor 参数替换为自定义函数）。
 
@@ -18,7 +16,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .base import BatchMetric, Metric
+from .base import Metric
 
 __all__ = [
     "preds_from_logits",
@@ -74,10 +72,11 @@ def preds_from_logits(
     return [1 if float(x) >= threshold else 0 for x in data]
 
 
-class Accuracy(BatchMetric):
-    """准确率。
+class Accuracy(Metric):
+    """准确率（实时指标：每次喂入立即计算）。
 
-    继承 BatchMetric：只实现单 batch 计算，累积与跨 GPU 合并由框架完成。
+    只实现 compute()：单 batch 计算，各 batch 按样本数加权出全局值，
+    跨 GPU 合并由框架完成。
 
     Args:
         num_classes / threshold / predictor: 同 preds_from_logits。
@@ -91,13 +90,12 @@ class Accuracy(BatchMetric):
         topk: Optional[int] = None,
         predictor: Optional[Predictor] = None,
     ):
-        super().__init__()
         self.num_classes = num_classes
         self.threshold = threshold
         self.topk = topk
         self._predictor = predictor or preds_from_logits
 
-    def compute_batch(self, logits: Any, labels: Any) -> Tuple[float, float]:
+    def compute(self, logits: Any, labels: Any) -> Tuple[float, float]:
         preds = self._predictor(logits, self.num_classes, self.threshold, self.topk)
         targets = _plain(labels)
         _check_pair(preds, targets)
@@ -110,11 +108,11 @@ class Accuracy(BatchMetric):
 
 
 class _CountMetric(Metric):
-    """基于 (pred, target) 计数的分类指标公共基类。
+    """基于 (pred, target) 计数的分类指标公共基类（epoch 级）。
 
-    update 返回本批次逐样本预测对的计数 {(pred, target): 次数}，框架
-    自动按键求和跨 GPU 合并；子类实现 _from_counts()（经基类 compute
-    调用）从合并后的计数算出全局结果，如 macro F1、混淆矩阵。
+    prepare 返回本批次逐样本预测对的计数 {(pred, target): 次数}，框架
+    自动按键求和跨 GPU 合并；compute 从合并后的计数算出全局结果
+    （子类经 _from_counts 实现），如 macro F1、混淆矩阵。
     """
 
     def __init__(
@@ -123,12 +121,11 @@ class _CountMetric(Metric):
         threshold: float = 0.5,
         predictor: Optional[Predictor] = None,
     ):
-        super().__init__()
         self.num_classes = num_classes
         self.threshold = threshold
         self._predictor = predictor or preds_from_logits
 
-    def update(self, logits: Any, labels: Any) -> Dict[Tuple[int, int], float]:
+    def prepare(self, logits: Any, labels: Any) -> Dict[Tuple[int, int], float]:
         preds = self._predictor(logits, self.num_classes, self.threshold, None)
         targets = _plain(labels)
         _check_pair(preds, targets)
@@ -297,11 +294,10 @@ class AUC(Metric):
     """
 
     def __init__(self, pos_index: int = 1, class_index: Optional[int] = None):
-        super().__init__()
         self.pos_index = pos_index
         self.class_index = class_index
 
-    def update(self, logits: Any, labels: Any) -> List[Tuple[float, bool]]:
+    def prepare(self, logits: Any, labels: Any) -> List[Tuple[float, bool]]:
         rows = _plain(logits)
         targets = _plain(labels)
         _check_pair(rows, targets)

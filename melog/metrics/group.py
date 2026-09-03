@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 from ..utils.distributed import gather_object
-from .base import BatchMetric, Metric
+from .base import Metric, _param_specs
 from .basic import Mean
 
 __all__ = ["MetricGroup"]
@@ -19,7 +20,7 @@ class MetricGroup:
         metrics = MetricGroup({"loss": Mean(), "acc": Accuracy()})
 
         # 每个 batch（所有 rank 都执行）：标量按注册名喂入，
-        # 单批次指标的观测单独放进 args（元组按位置 / 字典按键名）
+        # 观测型指标的观测单独放进 args（元组按位置 / 字典按键名）
         metrics.feed(args={"logits": logits, "labels": labels}, loss=loss, n=1)
 
         # epoch 末：交给 StepsBar 的 metrics=... 自动合并记录并重置；
@@ -59,28 +60,22 @@ class MetricGroup:
         落盘。
 
         Args:
-            args: 单批次指标（BatchMetric，如分类指标与自定义
-                compute_batch 指标）的观测，单独成组传入：
-                - 元组：按位置对应各指标 compute_batch 的形参
-                - 字典：按键名对应 compute_batch 的形参名（推荐，
-                  形参多时更可读）
-                组内没有单批次指标时可不传。
+            args: 观测型指标（如分类指标的 logits/labels）的观测，单独
+                成组传入：字典按键名对应指标 compute / prepare 的形参名
+                （推荐，形参多时更可读），自动分发给形参名匹配的指标，
+                多余的键忽略；元组按位置喂给未被注册名喂入的指标。
             write: 是否实时写入日志/面板（挂接 StepsBar 时生效，默认
                 True 即 feed 即记录）。
-            **batch: 标量指标（Mean / Sum / Last / Count）的观测，按
-                注册名取同名键。Mean 的观测数自动取 StepsBar 识别的
-                批次样本数（识别失败等权）；需手动指定时传元组
-                (值, 观测数)，如 loss=(3.2, batch_size)。没有同名键
-                就跳过（不累积也不报错）。
+            **batch: 按注册名喂入的指标观测（如 loss / lr），同名键取值；
+                Mean 的观测数自动取 StepsBar 识别的批次样本数（识别失败
+                等权）；需手动指定时传元组 (值, 观测数)，如
+                loss=(3.2, batch_size)。没有同名键就跳过（不累积也不报错）。
         """
         count = self._batch_count
+        named: Dict[str, Any] = {}
         for name, metric in self._metrics.items():
-            if isinstance(metric, BatchMetric):
-                if isinstance(args, dict):
-                    metric.feed(**args)
-                elif args is not None:
-                    metric.feed(*args)
-            elif name in batch:
+            if name in batch:
+                named[name] = batch[name]
                 value = batch[name]
                 if isinstance(value, tuple):
                     metric.feed(*value)
@@ -88,8 +83,28 @@ class MetricGroup:
                     metric.feed(value, count)
                 else:
                     metric.feed(value)
+        if args is not None:
+            if isinstance(args, dict):
+                for name, metric in self._metrics.items():
+                    if name in named:
+                        continue  # 已按注册名喂入，不重复
+                    if self._accepts(metric, args):
+                        metric.feed(**args)
+            else:
+                for name, metric in self._metrics.items():
+                    if name not in named:
+                        metric.feed(*args)
         if self._on_feed is not None:
             self._on_feed(write)
+
+    @staticmethod
+    def _accepts(metric: Metric, args: Dict[str, Any]) -> bool:
+        """指标的 compute / prepare 形参名是否与 args 的键匹配。"""
+        specs = _param_specs(metric._entry())
+        return bool(args) and (
+            any(name in args for name, _k, _d in specs)
+            or any(kind is inspect.Parameter.VAR_KEYWORD for _n, kind, _d in specs)
+        )
 
     def local(self) -> Dict[str, Any]:
         """当前 rank 的本地指标值（零通信，不触发跨 rank 收集），供实时显示。

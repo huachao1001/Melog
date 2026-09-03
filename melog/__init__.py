@@ -19,7 +19,6 @@ from .api import (
 from .metrics import (
     Accuracy,
     AUC,
-    BatchMetric,
     ConfusionMatrix,
     Count,
     F1,
@@ -49,7 +48,6 @@ __all__ = [
     "warn",
     "set_colors",
     "Metric",
-    "BatchMetric",
     "MetricGroup",
     "Mean",
     "Sum",

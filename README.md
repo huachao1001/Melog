@@ -250,17 +250,17 @@ metric.feed(logits=logits, labels=labels, mask=mask)
 ```python
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 
-# 每个 batch：feed 把观测累积进各指标的内存状态（单批次指标观测放 args，
-# 标量指标按注册名，元组 (值, 观测数) 表示手动指定观测数）。挂接
-# StepsBar 时 feed 即自动记录本卡实时值；独立使用则需手动 scalar 落盘
-metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
-             loss=(loss, batch_size))
+# 每个 batch：feed 把观测累积进各指标的内存状态并自动记录本卡实时值
+# （单批次指标观测放 args，标量指标按注册名，Mean 自动按批次样本数平均）
+for logits, labels, mask in StepsBar(loader, epoch=epoch, metrics=metrics):
+    metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
+                 loss=loss)
 
-# epoch 末：melog.scalar(metrics) = 跨 GPU 同步合并 + 写日志/推送面板，
-# 再 reset 清零。不做这步，指标只留在内存里——日志中不会出现，也不会归零开启下一轮
-melog.scalar(metrics)
-metrics.reset()
+# epoch 末无需任何手动调用：StepsBar 结束时自动跨 GPU 合并记录 + reset
 ```
+
+不用 StepsBar 包裹时（如独立验证脚本）才需要手动落盘：
+`melog.scalar(metrics)` 跨 GPU 合并记录，`metrics.reset()` 清零开启下一轮。
 
 **epoch 级指标**：全局结果无法由各 batch 值加权平均还原时（如 macro F1、AUC），
 继承 `Metric` 实现完整契约，跨 GPU 状态收集仍由基类完成：

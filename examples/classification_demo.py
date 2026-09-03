@@ -23,7 +23,8 @@ import math
 import random
 import time
 
-from melog import Accuracy, AUC, F1, Mean, Melog, MetricGroup, Recall
+import melog
+from melog import Accuracy, AUC, F1, Mean, MetricGroup, Recall
 
 CLASSES = 4
 EPOCHS = 5        # epoch 数：log 时传入 epoch，曲线按 epoch 画分界线
@@ -55,7 +56,7 @@ def simulate_batch(step, rng):
 
 def main():
     rng = random.Random(7)
-    logger = Melog(project="demo-multiclass", web_port=8666)
+    logger = melog.init("melog_runs/demo-multiclass", web_port=8666)
     # 可选：为个别指标固定颜色（覆盖自动配色，其余仍按名称 hash 分配）
     logger.set_colors({"recall/class_2": "#ef4444", "recall/class_3": "#94a3b8"})
     url = logger._web.url if logger._web else "未启用"

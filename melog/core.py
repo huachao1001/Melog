@@ -39,14 +39,13 @@ _PRINT_PATCHED: list = []
 
 
 class Melog:
-    """训练监控主入口。
+    """训练监控主入口（内部实现；公开入口为 melog.init()）。
 
     用法：
-        >>> from melog import Melog
-        >>> logger = Melog(project="demo", enable_web=True)
+        >>> import melog
+        >>> logger = melog.init(log_dir="runs/demo")
         >>> for step in logger.progress(range(100)):
-        ...     loss = 1.0 / (step + 1)
-        ...     logger.scalar({"loss": loss, "lr": 1e-3})
+        ...     logger.scalar({"loss": loss})
     """
 
     def __init__(
@@ -501,13 +500,22 @@ def current() -> "Melog":
     return _active
 
 
-def init(**kwargs: Any) -> Melog:
-    """创建并激活全局共享的 Melog 实例，参数与 Melog(...) 完全一致。
+def init(log_dir: str = "./melog_runs", web_port: int = 8666, **kwargs: Any) -> Melog:
+    """创建并激活全局共享的 Melog 实例（melog 的唯一公开入口）。
 
-    入口处调用一次，之后项目任意位置可直接使用模块级 melog.scalar() 等接口。
-    再次调用会用新实例替换当前活动实例。
+    Args:
+        log_dir: 日志保存路径；本次运行的指标 / 媒体 / console.log 落在
+            其下的时间戳子目录中，路径末级目录名作为项目名展示。
+        web_port: Web 监听端口。
+        **kwargs: 其余高级参数（enable_web / enable_progress / reduce_op /
+            flush_every / max_plot_points，以及 project 覆盖项目名等）。
+
+    入口处调用一次，之后项目任意位置可直接使用模块级 melog.scalar() 等
+    接口。再次调用会用新实例替换当前活动实例。
     """
-    return Melog(**kwargs)
+    log_dir = Path(log_dir)
+    kwargs.setdefault("project", log_dir.name)
+    return Melog(output_dir=str(log_dir.parent), web_port=web_port, **kwargs)
 
 
 def scalar(

@@ -14,7 +14,8 @@ import math
 import os
 import time
 
-from melog import Melog, Mean, Max, MetricGroup, Sum
+import melog
+from melog import Mean, Max, MetricGroup, Sum
 from melog.distributed import get_rank, get_world_size, is_distributed
 
 STEPS = 200
@@ -23,7 +24,7 @@ EPOCHS = 3
 
 def main():
     rank = get_rank()
-    logger = Melog(project="demo-multi", web_port=8666)
+    logger = melog.init("melog_runs/demo-multi", web_port=8666)
 
     if rank == 0:
         ws = f", Web: {logger._web.url}" if logger._web else ""

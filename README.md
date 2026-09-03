@@ -24,9 +24,9 @@ pip install -e .            # 基础安装
 ## 快速开始
 
 ```python
-from melog import Melog
+import melog
 
-logger = Melog(project="my-exp", web_port=8666)
+logger = melog.init("runs/my-exp", web_port=8666)   # 日志保存路径 + 端口，全局唯一入口
 
 for step in logger.progress(range(1000)):     # tqdm 风格：自动推进，无需手动 update
     loss = train_one_step()
@@ -39,12 +39,13 @@ logger.finish()   # 落盘剩余指标并停止 Web 服务
 
 ## 全局共享
 
-入口处 `init` 一次，项目任何地方直接用模块级接口，无需层层传递实例：
+`melog.init` 是唯一入口，创建的实例自动成为全局活动实例。入口处 `init` 一次，
+项目任何地方直接用模块级接口，无需层层传递实例：
 
 ```python
 import melog
 
-logger = melog.init(project="my-exp")   # 或 melog.Melog(...)，自动成为全局活动实例
+logger = melog.init(log_dir="runs/my-exp", web_port=8666)   # 日志保存路径 + 端口
 
 # 任意其他模块中：
 import melog
@@ -53,6 +54,8 @@ melog.image("sample", img)
 melog.finish()                          # 训练结束收尾
 ```
 
+- `log_dir` 末级目录名即项目名（`runs/my-exp` → 项目 `my-exp`），本次运行落在
+  `runs/my-exp/<时间戳>/` 下；`project=` 可覆盖项目名
 - 最近一次创建的实例即全局活动实例（`melog.current()` 取回），`finish()` 后清空
 - 模块级 `scalar / log_group / image / audio / log / success / error / warn / set_colors / finish` 与实例方法等价
 - 实例内部有锁，多线程 / 多模块共享安全；多 GPU 约定不变
@@ -117,9 +120,10 @@ logger.audio("val/audio", wav, sr=16000) # 路径(wav/mp3/…) / numpy / torch �
 内置 `Mean` / `Sum` / `Max` / `Min` / `Last` / `Count`，按 epoch 组织在 `MetricGroup` 中使用：
 
 ```python
-from melog import Melog, Mean, Max, MetricGroup, Sum
+import melog
+from melog import Mean, Max, MetricGroup, Sum
 
-logger = Melog(project="my-exp")
+logger = melog.init("runs/my-exp")
 metrics = MetricGroup({
     "loss": Mean(),      # 加权平均：update(loss, batch_size)
     "acc": Mean(),
@@ -237,17 +241,17 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 ## API
 
-### `Melog(...)`
+### `melog.init(...)`
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `project` | `"melog"` | 项目名（输出子目录） |
-| `output_dir` | `./melog_runs` | 持久化根目录 |
+| `log_dir` | `./melog_runs` | 日志保存路径；本次运行落在其下时间戳子目录，末级目录名即项目名 |
+| `web_port` | `8666` | Web 监听端口（`web_host` 默认 `127.0.0.1`） |
 | `enable_web` | `True` | 启动 Web 服务（仅 rank0） |
-| `web_host` / `web_port` | `127.0.0.1:8666` | Web 监听地址 |
 | `enable_progress` | `True` | 启用控制台进度条 |
 | `reduce_op` | `"mean"` | 多 GPU 合并方式 |
 | `flush_every` | `1` | 每 N 次 scalar 落盘一次 |
+| `project` | `log_dir` 末级目录名 | 覆盖项目名 |
 
 ### 主要方法
 

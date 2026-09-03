@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 
-from melog import Melog
+import melog
 
 EPOCHS = 3
 STEPS = 40        # 每个 epoch 步数
@@ -53,7 +53,7 @@ def make_audio(step: int, total: int, sr: int = 22050) -> np.ndarray:
 
 
 def main():
-    logger = Melog(project="demo-media", web_port=8666)
+    logger = melog.init("melog_runs/demo-media", web_port=8666)   # 日志保存路径 + 端口
     print(f"Web 可视化: {logger._web.url if logger._web else '未启用'} （页签切换 曲线/图像/音频，Ctrl+C 退出）")
 
     total = EPOCHS * STEPS

@@ -9,14 +9,14 @@ import math
 import random
 import time
 
-from melog import Melog
+import melog
 
 STEPS = 3000       # 足够长，方便观察
 INTERVAL = 0.5     # 每 0.5s 推送一次
 
 
 def main():
-    logger = Melog(project="web-demo", web_port=8666)
+    logger = melog.init("melog_runs/web-demo", web_port=8666)
     url = logger._web.url if logger._web else "未启用"
     print(f"Web 可视化: {url} （浏览器打开查看实时曲线，Ctrl+C 退出）")
 

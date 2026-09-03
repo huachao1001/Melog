@@ -7,14 +7,14 @@
 import math
 import time
 
-from melog import Melog
+import melog
 
 EPOCHS = 4
 STEPS = 50
 
 
 def main():
-    logger = Melog(project="demo-single", web_port=8666)
+    logger = melog.init("melog_runs/demo-single", web_port=8666)
     print(f"Web 可视化: {logger._web.url if logger._web else '未启用'}")
 
     for epoch in range(EPOCHS):

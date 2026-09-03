@@ -1,7 +1,8 @@
 """Melog 包入口。"""
 
+"""Melog 包入口。"""
+
 from .core import (
-    Melog,
     audio,
     current,
     error,
@@ -36,10 +37,9 @@ from .metrics import (
 
 __version__ = "0.1.0"
 __all__ = [
-    "Melog",
-    "tqdm",
     "init",
     "current",
+    "tqdm",
     "scalar",
     "log",
     "log_group",

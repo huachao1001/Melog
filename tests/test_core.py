@@ -243,7 +243,7 @@ def test_global_shared_instance(tmp_path):
     import melog as pkg
     from melog.core import _get_active
 
-    lg = pkg.init(project="g", output_dir=str(tmp_path), enable_web=False)
+    lg = pkg.init(tmp_path / "g", enable_web=False)
     try:
         assert pkg.current() is lg
         pkg.scalar({"a": 1.5}, epoch=0, step=3)
@@ -264,8 +264,8 @@ def test_global_reinit_switches_active_instance(tmp_path):
     """再次 init 用新实例替换活动实例；旧实例仍可显式使用。"""
     import melog as pkg
 
-    first = pkg.init(project="g1", output_dir=str(tmp_path), enable_web=False)
-    second = pkg.init(project="g2", output_dir=str(tmp_path), enable_web=False)
+    first = pkg.init(tmp_path / "g1", enable_web=False)
+    second = pkg.init(tmp_path / "g2", enable_web=False)
     try:
         assert pkg.current() is second
         pkg.scalar({"a": 1.0})

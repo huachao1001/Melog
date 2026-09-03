@@ -6,11 +6,11 @@
 
 import time
 
-from melog import Melog
+import melog
 
 
 def main():
-    logger = Melog(project="console-demo", enable_web=False)
+    logger = melog.init("melog_runs/console-demo", enable_web=False)
 
     logger.log("普通消息：多参数", {"k": 1}, 2)   # 终端默认色（黑字），无前缀
     logger.success("模型保存成功 -> checkpoint.pt")  # 绿色 ✔

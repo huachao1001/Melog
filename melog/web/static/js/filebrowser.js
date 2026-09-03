@@ -30,8 +30,15 @@ export class FileBrowser {
       else this.msg('请先进入某个目录', 'err');
     });
     document.getElementById('fbLive').addEventListener('click', async () => {
+      // 回到实时：切回实时展示，并把路径自动填为实时日志所在目录（窗口保持打开）
       await fetch('/api/unload', { method: 'POST' });
-      this.close();
+      try {
+        const res = await fetch('/api/fs');
+        const info = await res.json();
+        await this.navigate(info.default || '');
+      } catch {
+        this.msg('未获取到实时路径', 'err');
+      }
     });
   }
 
@@ -124,8 +131,8 @@ export class FileBrowser {
       item.addEventListener('click', () => this.load(FileBrowser.join(info.path, name)));
       this.listEl.appendChild(item);
     }
-    if (!info.files.length) {
-      // 目录下没有 .melog 日志时给出明确提示（目录仍可继续浏览）
+    if (!info.dirs.length && !info.files.length) {
+      // 仅空目录提示无 .melog 日志；有子目录的目录仍可继续浏览，不打扰
       const hint = document.createElement('div');
       hint.className = 'fb-empty';
       hint.textContent = '无melog文件';

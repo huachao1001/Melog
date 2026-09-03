@@ -17,30 +17,30 @@ def read(path) -> str:
 
 
 # ---------------------------------------------------------------- Mirror
-def test_mirror_bar_refresh_in_place(tmp_path):
-    """进度条行（\\r 结尾）在文件中就地刷新，只保留最后一行。"""
+def test_mirror_bar_appends_snapshots(tmp_path):
+    """进度条行（\\r 结尾）每次到期落盘为完整快照行，tail -f 可见滚动刷新。"""
     m = Mirror(tmp_path / "c.log", throttle=0)
     m.write("train ██░░ 10%\r")
     m.write("train ████ 30%\r")
     m.close()
-    assert read(tmp_path / "c.log") == "train ████ 30%\n"  # close 定稿为普通行
+    assert read(tmp_path / "c.log") == "train ██░░ 10%\ntrain ████ 30%\n"
 
 
 def test_mirror_bar_throttled(tmp_path):
-    """进度条行按节流间隔落盘：间隔内跳过，定稿时补最新内容。"""
+    """进度条快照按节流间隔追加：间隔内跳过，定稿时补最新内容且不重复。"""
     t = [0.0]
     m = Mirror(tmp_path / "c.log", throttle=2.0, clock=lambda: t[0])
     m.write("bar 10%\r")       # 首帧立即写
     t[0] = 1.0
     m.write("bar 20%\r")       # 间隔内 → 跳过
-    assert read(tmp_path / "c.log") == "bar 10%\r"
+    assert read(tmp_path / "c.log") == "bar 10%\n"
     t[0] = 3.0
-    m.write("bar 30%\r")       # 超过节流间隔 → 刷新
-    assert read(tmp_path / "c.log") == "bar 30%\r"
-    m.write("hello\n")         # 普通行：先定稿最新进度条（40%）再追加
+    m.write("bar 30%\r")       # 超过节流间隔 → 追加快照
+    assert read(tmp_path / "c.log") == "bar 10%\nbar 30%\n"
+    m.write("hello\n")         # 普通行：先补写最新进度条（40%）再追加
     m.write("bar 40%\r")
     m.write("done\n")
-    assert read(tmp_path / "c.log") == "bar 30%\nhello\nbar 40%\ndone\n"
+    assert read(tmp_path / "c.log") == "bar 10%\nbar 30%\nhello\nbar 40%\ndone\n"
     m.close()
 
 
@@ -52,18 +52,28 @@ def test_mirror_finalize_uses_latest_content(tmp_path):
     t[0] = 1.0
     m.write("bar 99%\r")       # 被节流
     m.write("ok\n")            # 定稿应写 99%
-    assert read(tmp_path / "c.log") == "bar 99%\nok\n"
+    assert read(tmp_path / "c.log") == "bar 10%\nbar 99%\nok\n"
     m.close()
 
 
+def test_mirror_finalize_dedup_latest_snapshot(tmp_path):
+    """定稿内容与文件最后一行快照相同时不重复追加。"""
+    t = [0.0]
+    m = Mirror(tmp_path / "c.log", throttle=2.0, clock=lambda: t[0])
+    m.write("bar 50%\r")       # 快照已落盘
+    m.write("\n")              # close 的换行：不重复写 50%，也不补空行
+    m.close()
+    assert read(tmp_path / "c.log") == "bar 50%\n"
+
+
 def test_mirror_resume_trailing_cr(tmp_path):
-    """打开已有文件：最后一行以 \\r 结尾（不可见空白字符）→ 视为进度条行，就地刷新。"""
+    """打开旧版日志：最后一行以 \\r 结尾（就地刷新遗留）→ 升级为完整行后正常追加。"""
     p = tmp_path / "c.log"
     p.write_bytes("旧进度 50%\r".encode("utf-8"))
     m = Mirror(p, throttle=0)
     m.write("新进度 80%\r")
     m.close()
-    assert read(p) == "新进度 80%\n"
+    assert read(p) == "旧进度 50%\r\n新进度 80%\n"
 
 
 def test_mirror_partial_line_buffered_then_joined(tmp_path):
@@ -337,14 +347,13 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
 
 
 def test_melog_console_log_progress_line_uses_cr(tmp_path):
-    """日志文件里的进度条行以 \\r 结尾（不可见空白字符标记），定稿后变 \\n。"""
+    """训练中途 console.log 已有进度条快照行（tail -f 每 2 秒滚动可见）。"""
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
         for _ in StepsBar(range(1)):
-            # 迭代中途：最后一行应为 \r 结尾的进度条行
             path = next((tmp_path / "t").glob("**/console.log"))
-            assert path.read_bytes().endswith(b"\r")
+            assert "[0/1]" in path.read_bytes().decode("utf-8")  # 首帧快照已落盘
     finally:
         lg.close()
     path = next((tmp_path / "t").glob("**/console.log"))
-    assert path.read_bytes().endswith(b"\n")  # close 定稿
+    assert path.read_bytes().endswith(b"\n")  # 定稿为完整行

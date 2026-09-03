@@ -1,15 +1,15 @@
-"""控制台镜像：把控制台输出（含进度条）原样同步到日志文件。
+"""控制台镜像：把控制台输出（含进度条）同步到日志文件。
 
 写入协议（与显示约定一致）：
-- 以 ``\\r`` 结尾的片段是进度条行——文件中只保留最后一行，就地刷新
-  （seek 回行首、截断、重写），默认 2 秒节流，避免频繁写盘；进度条
-  结束（遇到普通行 / close）时立即把最新内容定稿为普通行
-- 以 ``\\n`` 结尾的是普通行——先把未定稿的进度条定稿，再追加该行并 flush
+- 以 ``\\r`` 结尾的片段是进度条行——日志文件里每隔 throttle 秒追加
+  一行完整快照（默认 2 秒），``tail -f`` 即可看到滚动刷新；两次快照
+  之间的最新内容在进度条结束（遇到普通行 / close）时补写为最后一行
+- 以 ``\\n`` 结尾的是普通行——先把未落盘的最新进度条补写，再追加该行
 - hook_stdio() 把 sys.stdout / sys.stderr 替换为分流器：控制台（如有）
   与日志文件内容一致；unhook_stdio() 还原
 
-打开已有文件时，若最后一行以 ``\\r``（不可见空白字符）结尾，则视为一条
-未完的进度条行，后续刷新继续覆盖该行（支持进程重启后续写）。
+打开已有文件时，若最后一行以 ``\\r`` 结尾（旧版本就地刷新协议留下
+的未完进度条行），补一个换行升级为完整行，后续快照正常追加。
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class _Tee:
 
 
 class Mirror:
-    """日志文件镜像：进度条行就地刷新，普通行直接落盘，并可接管标准输入输出。"""
+    """日志文件镜像：进度条按节流间隔追加快照行，普通行直接落盘，并可接管标准输入输出。"""
 
     def __init__(
         self,
@@ -67,7 +67,7 @@ class Mirror:
         """
         Args:
             path: 日志文件路径。
-            throttle: 进度条行落盘的最小间隔（秒），定稿时不受限。
+            throttle: 进度条快照落盘的最小间隔（秒），定稿时不受限。
             clock: 时间源，测试可注入假时钟。
         """
         self._path = Path(path)
@@ -75,10 +75,10 @@ class Mirror:
         self._clock = clock
         self._lock = threading.Lock()
         self._buf = ""  # 尚未遇到 \r / \n 的不完整输出
-        self._bar_content: Optional[str] = None  # 当前进度条内容（不含 \r；None 表示无）
-        self._bar_in_file = False  # 文件最后一行是否为进度条行
-        self._bar_start = 0  # 进度条行起始字节偏移
-        self._last_write = 0.0
+        self._bar_content: Optional[str] = None  # 尚未落盘的最新进度条内容
+        self._bar_flushed: Optional[str] = None  # 文件里最后一行进度条快照
+        self._bar_last = False  # 文件最后一行是否为进度条行（换行归属判断用）
+        self._last_write = float("-inf")  # 首帧必落盘
         self._saved: Tuple = ()
         self._stdout_tee = None
         self._hooked = False
@@ -117,15 +117,15 @@ class Mirror:
                 self._file.flush()
 
     def close(self) -> None:
-        """收尾：进度条定稿为最新内容，剩余缓冲按普通行落盘，关闭文件。"""
+        """收尾：未落盘的最新进度条补写为完整行，剩余缓冲成行，关闭文件。"""
         with self._lock:
             if self._file.closed:
                 return
             if self._buf:
                 seg, self._buf = self._buf, ""
                 self._on_line(seg)
-            elif self._bar_content is not None or self._bar_in_file:
-                self._finalize_bar()
+            elif self._bar_content is not None and self._bar_content != self._bar_flushed:
+                self._flush_bar(self._bar_content)
             self._file.close()
 
     # ------------------------------------------------------------------ 内部
@@ -140,53 +140,42 @@ class Mirror:
                 tail = f.read()
                 f.seek(0, 2)
                 last = tail[tail.rfind(b"\n") + 1:]
-                if last.endswith(b"\r"):  # 未完的进度条行：后续刷新继续覆盖
-                    self._bar_in_file = True
-                    self._bar_start = size - len(last)
-                    self._bar_content = ""
+                if last.endswith(b"\r"):
+                    # 旧版就地刷新协议留下的未完进度条行：补换行升级为完整行
+                    f.write(b"\n")
+                    f.flush()
             return f
         p.parent.mkdir(parents=True, exist_ok=True)
         return open(p, "w+b")
 
     def _on_bar(self, seg: str) -> None:
-        self._bar_content = seg
         now = self._clock()
-        if self._bar_in_file and now - self._last_write < self._throttle:
-            return  # 节流：文件暂不刷新，定稿时会补写最新内容
-        self._write_bar(seg)
-
-    def _write_bar(self, seg: str) -> None:
-        data = seg.encode("utf-8") + b"\r"
-        if self._bar_in_file:
-            self._file.seek(self._bar_start)
-            self._file.truncate()
+        if now - self._last_write >= self._throttle:
+            self._flush_bar(seg)  # 到期：追加一行完整快照（tail -f 可见）
         else:
-            self._bar_start = self._file.tell()
-            self._bar_in_file = True
-        self._file.write(data)
+            self._bar_content = seg  # 节流间隔内：暂存最新内容，定稿时补写
+
+    def _flush_bar(self, content: str) -> None:
+        self._file.write(content.encode("utf-8") + b"\n")
         self._file.flush()
+        self._bar_flushed = content
+        self._bar_content = None
+        self._bar_last = True
         self._last_write = self._clock()
 
     def _on_line(self, seg: str) -> None:
-        finalized = self._bar_content is not None or self._bar_in_file
-        if finalized:
-            self._finalize_bar()
-        # 空片段仅在"没有进度条可定稿"时才落盘（print("\n") 的空行）；
-        # 刚定稿完进度条的空片段是 bar 行自己的换行，不再补一行空行
-        if seg or not finalized:
+        had_pending = self._bar_content is not None
+        if had_pending:
+            if self._bar_content != self._bar_flushed:  # 补写节流期间落下的最新内容
+                self._flush_bar(self._bar_content)
+            else:
+                self._bar_content = None  # 与文件最后一行快照相同，无需重复
+        # 空片段仅在"没有进度条行收尾"时才落盘（print("\n") 的空行）；
+        # 进度条行自己的换行（刚定稿 / 已有快照）不补空行
+        if seg or not (had_pending or self._bar_last):
             self._file.write(seg.encode("utf-8") + b"\n")
             self._file.flush()
-
-    def _finalize_bar(self) -> None:
-        """把进度条行以最新内容定稿为普通行（绕过节流）。"""
-        content = self._bar_content or ""
-        if self._bar_in_file:
-            self._file.seek(self._bar_start)
-            self._file.truncate()
-        self._file.write(content.encode("utf-8") + b"\n")
-        self._file.flush()
-        self._bar_in_file = False
-        self._bar_content = None
+            self._bar_last = False
 
     # ------------------------------------------------------------------ stdio
     def hook_stdio(self) -> None:

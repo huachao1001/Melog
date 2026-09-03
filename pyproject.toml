@@ -16,7 +16,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-torch = ["torch>=2.0"]
 dev = ["pytest>=7.0", "httpx>=0.24"]
 
 [project.scripts]

@@ -17,8 +17,9 @@
 
 ```bash
 pip install -e .            # 基础安装
-pip install -e ".[torch]"   # 多 GPU 合并需要 torch
 ```
+
+多 GPU 合并基于 `torch.distributed`，假定环境中已装好 PyTorch；未装 torch 时自动退化单进程。
 
 ## 快速开始
 

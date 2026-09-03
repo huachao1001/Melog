@@ -149,7 +149,7 @@ for epoch in range(epochs):
 ```
 - 默认各 batch **等权平均**，无需传 batch_size；多 GPU 下合并为全局等权平均，而非"各卡平均值的平均"
 - 各 batch 样本数不均（如最后一个不满 batch）、需要按样本 / token 精确加权时，
-  传**元组** `(值, 权重)`：`metrics.feed(loss=(loss, token_num))`
+  传**元组** `(值, 观测数)`：`metrics.feed(loss=(loss, token_num))`
 - `melog.scalar(metrics)` 随时可落盘当前累计值；**必须算完一个 epoch 才有意义的指标**，
   在 epoch 末统一记录一次即可（交给 StepsBar 自动执行，或手动调用）
 - 跨 GPU 合并是集合操作：**所有 rank 必须以相同顺序执行**，返回值各 rank 一致；单进程自动直通
@@ -184,7 +184,7 @@ metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
 一句话：**单批次指标的观测放 `args`，标量指标按注册名"点名取值"**。两类规则
 互不干扰，所以同一个 feed 调用可以同时喂两类指标；无主的多余观测两边都不收。
 
-单独使用某个指标时规则一致：标量指标位置喂入 `Mean().feed(value, weight)`；
+单独使用某个指标时规则一致：标量指标位置喂入 `Mean().feed(value, count)`；
 BatchMetric 具名或位置均可 `MaskedAcc().feed(logits=..., labels=..., mask=...)`，
 框架同样按 `compute_batch` 形参名组装。
 
@@ -230,14 +230,14 @@ class MaskedAcc(BatchMetric):
     def compute_batch(self, logits, labels, mask):
         hits = ((logits.argmax(-1) == labels) & mask).sum()
         n = mask.sum()
-        return (hits / n, n)          # 返回 (值, 权重)：按样本数加权出全局结果
+        return (hits / n, n)          # 返回 (值, 观测数)：按样本数平均出全局结果
 
 # 训练循环里：位置或具名喂入均可，多余观测自动忽略
 metric.feed(logits, labels, mask)
 metric.feed(logits=logits, labels=labels, mask=mask)
 ```
 
-- `compute_batch` 返回 `(值, 权重)` 元组：各 batch 按权重加权平均（样本数不同时务必带上权重）；
+- `compute_batch` 返回 `(值, 观测数)` 元组：各 batch 按观测数（如样本数）平均（样本数不同时务必带上）；
   只返回 float 时各 batch 等权平均
 - 组合使用时交给 `MetricGroup.feed(...)` 统一分发：
 
@@ -245,7 +245,7 @@ metric.feed(logits=logits, labels=labels, mask=mask)
 metrics = MetricGroup({"loss": Mean(), "macc": MaskedAcc()})
 
 # 每个 batch：feed 只把观测累积进各指标的内存状态（单批次指标观测放 args，
-# 标量指标按注册名，元组 (值, 权重) 表示按 batch_size 加权），此时尚无任何输出
+# 标量指标按注册名，元组 (值, 观测数) 表示按 batch_size 计数），此时尚无任何输出
 metrics.feed(args={"logits": logits, "labels": labels, "mask": mask},
              loss=(loss, batch_size))
 

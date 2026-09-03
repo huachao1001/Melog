@@ -81,9 +81,9 @@ class BatchMetric(Metric):
         metric.feed(logits=..., labels=..., mask=...)  # 具名喂入
         metric.feed(logits, labels, mask)              # 位置喂入亦可
 
-    compute_batch 返回 float：各 batch 等权平均；返回 (value, weight)
-    元组：按 weight 加权平均（各 batch 样本数不同时推荐）。多 GPU 下
-    自动合并为全局结果（而非各卡平均值的平均）。
+    compute_batch 返回 float：各 batch 等权平均；返回 (value, count)
+    元组：按 count（观测数，如样本数）加权平均（各 batch 样本数不同时
+    推荐）。多 GPU 下自动合并为全局结果（而非各卡平均值的平均）。
 
     需要全局计数或排序的指标（如 macro F1、AUC），请改用 Metric 完整
     契约（参考内置分类指标 _CountMetric 的 _consume 写法）。
@@ -91,11 +91,11 @@ class BatchMetric(Metric):
 
     def __init__(self) -> None:
         self._sum = 0.0
-        self._weight = 0.0
+        self._count = 0.0
 
     @abstractmethod
     def compute_batch(self, *args: Any, **kwargs: Any) -> Any:
-        """计算单个 batch 的指标值：返回 float，或 (value, weight) 元组。"""
+        """计算单个 batch 的指标值：返回 float，或 (value, count) 元组。"""
 
     # ------------------------------------------------------------ 参数分发
     def _param_specs(self) -> List[Tuple[str, Any, Any]]:
@@ -150,19 +150,19 @@ class BatchMetric(Metric):
     def _consume(self, out: Any) -> None:
         """把 compute_batch 的返回值累积进状态；自定义累积方式时重写此处。"""
         if isinstance(out, tuple):
-            value, weight = _to_float(out[0]), _to_float(out[1])
+            value, count = _to_float(out[0]), _to_float(out[1])
         else:
-            value, weight = _to_float(out), 1.0
-        self._sum += value * weight
-        self._weight += weight
+            value, count = _to_float(out), 1.0
+        self._sum += value * count
+        self._count += count
 
     def state(self) -> List[float]:
-        return [self._sum, self._weight]
+        return [self._sum, self._count]
 
     def merge_states(self, states: List[List[float]]) -> float:
         total = math.fsum(s[0] for s in states)
-        weight = math.fsum(s[1] for s in states)
-        return total / weight if weight else float("nan")
+        count = math.fsum(s[1] for s in states)
+        return total / count if count else float("nan")
 
     def reset(self) -> None:
-        self._sum = self._weight = 0.0
+        self._sum = self._count = 0.0

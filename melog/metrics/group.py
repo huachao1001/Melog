@@ -49,7 +49,7 @@ class MetricGroup:
                   形参多时更可读）
                 组内没有单批次指标时可不传。
             **batch: 标量指标（Mean / Sum / Last / Count）的观测，按
-                注册名取同名键（带权重传元组，如 loss=(3.2, batch_size)）；
+                注册名取同名键（带观测数传元组，如 loss=(3.2, batch_size)）；
                 没有同名键就跳过（不累积也不报错）。
         """
         for name, metric in self._metrics.items():

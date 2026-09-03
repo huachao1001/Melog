@@ -21,14 +21,14 @@ from melog.metrics import (
 
 
 # ---------------------------------------------------------------- 内置指标
-def test_mean_weighted():
+def test_mean_with_count():
     m = Mean()
-    m.feed(1.0, 2)   # 权重 2
+    m.feed(1.0, 2)   # count 2（结果 = (1+2×2)/3）
     m.feed(4.0, 2)
     assert m.compute() == pytest.approx(2.5)
 
 
-def test_mean_default_weight():
+def test_mean_default_count():
     m = Mean()
     for v in (1.0, 2.0, 3.0):
         m.feed(v)
@@ -134,14 +134,14 @@ def test_batch_metric_empty_and_reset():
     assert m.compute() != m.compute()
 
 
-def test_batch_metric_custom_weight():
+def test_batch_metric_custom_count():
     class W(BatchMetric):
-        def compute_batch(self, value, weight):  # 形参名任意，框架按名取值
-            return (float(value), float(weight))
+        def compute_batch(self, value, count):  # 形参名任意，框架按名取值
+            return (float(value), float(count))
 
     w = W()
-    w.feed(value=2.0, weight=3.0)
-    w.feed(value=5.0, weight=1.0)
+    w.feed(value=2.0, count=3.0)
+    w.feed(value=5.0, count=1.0)
     assert w.compute() == pytest.approx((2.0 * 3.0 + 5.0) / 4.0)
 
 
@@ -182,7 +182,7 @@ def test_batch_metric_merge_across_ranks(monkeypatch):
 
 def test_group_feed_dispatch():
     group = MetricGroup({"loss": Mean(), "acc": Accuracy()})
-    # acc 按形参名/位置从 args 取 logits/labels；loss 按注册名取值（元组 = 值 + 权重）
+    # acc 按形参名/位置从 args 取 logits/labels；loss 按注册名取值（元组 = 值 + count）
     group.feed(args=([0.9, 0.2], [1, 0]), loss=(1.0, 2))
     out = group._compute()
     assert out["acc"] == pytest.approx(1.0)
@@ -240,7 +240,7 @@ def test_batch_metric_with_melog(tmp_path):
 
 # ---------------------------------------------------------------- 多 rank 合并逻辑
 def test_group_merge_across_ranks(monkeypatch):
-    # 模拟 2 个 rank 的状态：rank0 loss sum=4/weight=2，rank1 sum=1/weight=1
+    # 模拟 2 个 rank 的状态：rank0 loss sum=4/count=2，rank1 sum=1/count=1
     def fake_gather(states):
         # states 是本 rank 各指标的 state 列表，返回按 rank 排列的收集结果
         return [states, [dict(s) for s in states]]
@@ -255,15 +255,15 @@ def test_group_merge_across_ranks(monkeypatch):
 
 
 def test_metric_merge_states_multi_rank(monkeypatch):
-    # rank0: sum=4, weight=2；rank1: sum=1, weight=1 -> 全局 5/3
+    # rank0: sum=4, count=2；rank1: sum=1, count=1 -> 全局 5/3
     def fake_gather(states):
-        other = {"sum": 1.0, "weight": 1.0}
+        other = {"sum": 1.0, "count": 1.0}
         return [states, other]
 
     monkeypatch.setattr("melog.metrics.base.gather_object", fake_gather)
     m = Mean()
     m.feed(2.0, 2.0)
-    m.feed(2.0, 0.0)  # 不改变权重和（weight=0 的观测）
+    m.feed(2.0, 0.0)  # 不改变 count 和（count=0 的观测）
     assert m.compute() == pytest.approx(5.0 / 3.0)
 
 
@@ -294,12 +294,12 @@ def test_group_feed_scalars():
     assert out["n"] == pytest.approx(2.0)
 
 
-def test_group_tuple_weight_dispatch():
-    """元组 (值, 权重) 按指标精确加权，其余指标等权。"""
+def test_group_tuple_count_dispatch():
+    """元组 (值, count) 按指标精确平均，其余指标等权。"""
     group = MetricGroup({"loss": Mean(), "acc": Mean()})
     group.feed(loss=(2.0, 4), acc=0.5)
     out = group._compute()
-    assert out["loss"] == pytest.approx(2.0)   # sum=8, weight=4
+    assert out["loss"] == pytest.approx(2.0)   # sum=8, count=4
     assert out["acc"] == pytest.approx(0.5)
 
 

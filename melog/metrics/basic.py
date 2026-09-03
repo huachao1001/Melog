@@ -21,7 +21,7 @@ class ScalarMetric(Metric):
         - _ops: 状态名 -> 跨 rank 合并方式（"sum" / "max" / "min" / "first"）
         - _init: 各状态初始值（缺省 0.0，max/min 用 ±inf）
 
-    并实现 feed()；合并结果可经 _finalize() 加工（如 sum/weight）。
+    并实现 feed()；合并结果可经 _finalize() 加工（如 sum/count）。
     """
 
     _ops: Dict[str, str] = {}
@@ -61,25 +61,25 @@ class ScalarMetric(Metric):
 
 
 class Mean(ScalarMetric):
-    """加权平均。feed(value, weight=1.0)。
+    """按观测数加权的平均。feed(value, count=1.0)：结果 = sum(value * count) / sum(count)。
 
-    常规训练无需传 weight（各 batch 等权平均）；各 batch 样本数不均、
-    需要按样本/token 精确加权时才传 weight（经 MetricGroup 喂入时
-    传元组 (值, 权重)，如 loss=(loss, token_num)）。
+    常规训练无需传 count（各 batch 等权平均）；各 batch 样本数不均、
+    需要按样本/token 精确平均时才传 count（经 MetricGroup 喂入时
+    传元组 (值, count)，如 loss=(loss, token_num)）。
 
-    多 GPU 下自动按各 rank 的权重和合并，等价于全局样本加权平均，
+    多 GPU 下自动按各 rank 的 count 之和合并，等价于全局样本加权平均，
     而非"各卡平均值的平均"。
     """
 
-    _ops = {"sum": "sum", "weight": "sum"}
+    _ops = {"sum": "sum", "count": "sum"}
 
-    def feed(self, value: Any, weight: Any = 1.0) -> None:
-        self._acc["sum"] += _to_float(value) * _to_float(weight)
-        self._acc["weight"] += _to_float(weight)
+    def feed(self, value: Any, count: Any = 1.0) -> None:
+        self._acc["sum"] += _to_float(value) * _to_float(count)
+        self._acc["count"] += _to_float(count)
 
     def _finalize(self, merged: Dict[str, float]) -> float:
-        weight = merged["weight"]
-        return merged["sum"] / weight if weight else float("nan")
+        count = merged["count"]
+        return merged["sum"] / count if count else float("nan")
 
 
 class Sum(ScalarMetric):

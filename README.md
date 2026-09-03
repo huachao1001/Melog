@@ -65,19 +65,22 @@ melog.image("sample", img)
 
 ## 曲线上体现 epoch
 
-`scalar()` 可传入 `epoch` 与当前 epoch 内的 `step`，Web 曲线会在每个 epoch 起点画分界虚线
-（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`；两者都不传时内部自动统计 step，
-行为与旧版一致：
+`epoch` 完全可选：快速开始的示例从头到尾不传 `epoch`，就是一条按全局 step 记录的曲线，
+不标注 epoch 分界。需要按 epoch 观察时，把 `epoch` 传给 `scalar()`，Web 曲线会在每个
+epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`：
 
 ```python
 for epoch in range(epochs):
-    for step in range(steps):
-        logger.scalar({"loss": loss, "lr": lr}, epoch=epoch, step=step)
+    for _ in logger.progress(loader, description=f"epoch {epoch}"):
+        loss = train_one_step()
+        logger.scalar({"loss": loss, "lr": lr}, epoch=epoch)   # 每个 epoch 传一次即可
 ```
 
-- `epoch` 缺省时**粘滞沿用**上一次传入的值（整个 epoch 内只需传一次），从未传入则不记录 epoch
+- `epoch` 缺省时**粘滞沿用**上一次传入的值（每个 epoch 开始时传一次即可），从未传入则不记录 epoch
 - `step` 为**当前 epoch 内**的步数，缺省内部自增（每个 epoch 从 0 重新计步）；
   未启用 epoch 时 `step` 含义不变（全局步数，缺省自增）
+- 与 `progress()` 组合时无需传 `step`：迭代自动推进进度条，epoch 内步数由内部自增
+- `MetricGroup` 同理：`logger.log_group(metrics, epoch=epoch, reset=True)`
 
 ## 控制台消息
 
@@ -139,7 +142,7 @@ for epoch in range(epochs):
     for _ in logger.progress(range(steps)):
         metrics.update(loss=loss, acc=acc, lr=lr,
                        seen=batch_size, best_acc=acc, weight=batch_size)
-    logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置
+    logger.log_group(metrics, epoch=epoch, reset=True)   # epoch 末：同步 + 记录 + 重置
 ```
 
 - `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"

@@ -237,6 +237,17 @@ def test_progress_returns_bar(logger):
     assert bar.n == 10  # 迭代自动推进
 
 
+def test_progress_binds_epoch(logger):
+    """progress(epoch=...) 绑定当前 epoch：bar 内 scalar 免传；步数每轮清零、全局 x 接续。"""
+    for e in range(2):
+        for _ in logger.progress(range(3), epoch=e):
+            logger.scalar({"loss": 0.5})
+    logger.scalar({"loss": 0.25})  # bar 结束后沿用绑定的 epoch
+    recs = logger.store.snapshot()["loss"]
+    assert [r["epoch"] for r in recs] == [0, 0, 0, 1, 1, 1, 1]
+    assert [r["step"] for r in recs] == [0, 1, 2, 3, 4, 5, 6]
+
+
 def test_close_idempotent(logger):
     logger.scalar({"a": 1})
     logger.close()

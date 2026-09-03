@@ -64,21 +64,23 @@ melog.image("sample", img)
 ## 曲线上体现 epoch
 
 `epoch` 完全可选：快速开始的示例从头到尾不传 `epoch`，就是一条按全局 step 记录的曲线，
-不标注 epoch 分界。需要按 epoch 观察时，把 `epoch` 传给 `scalar()`，Web 曲线会在每个
-epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`：
+不标注 epoch 分界。需要按 epoch 观察时，把 `epoch` 传给 `progress()`（推荐）或 `scalar()`，
+Web 曲线会在每个 epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示
+`epoch N · step X`：
 
 ```python
 for epoch in range(epochs):
-    for _ in logger.progress(loader, description=f"epoch {epoch}"):
+    for _ in logger.progress(loader, epoch=epoch, description=f"epoch {epoch}"):
         loss = train_one_step()
-        logger.scalar({"loss": loss, "lr": lr}, epoch=epoch)   # 每个 epoch 传一次即可
+        logger.scalar({"loss": loss, "lr": lr})   # epoch 已由 progress 绑定，无需再传
 ```
 
-- `epoch` 缺省时**粘滞沿用**上一次传入的值（每个 epoch 开始时传一次即可），从未传入则不记录 epoch
+- `progress(epoch=...)` 进入进度条即绑定 epoch：epoch 内步数清零、全局 x 从上一位置接续；
+  bar 内的 `scalar()` / `log_group()` 免传 epoch，bar 结束后沿用，直至下一个 epoch
+- 直接调用 `scalar()` 时也可显式传 `epoch=...`；缺省粘滞沿用当前绑定的值，从未设置则不记录 epoch
 - `step` 为**当前 epoch 内**的步数，缺省内部自增（每个 epoch 从 0 重新计步）；
   未启用 epoch 时 `step` 含义不变（全局步数，缺省自增）
-- 与 `progress()` 组合时无需传 `step`：迭代自动推进进度条，epoch 内步数由内部自增
-- `MetricGroup` 同理：`logger.log_group(metrics, epoch=epoch, reset=True)`
+- `MetricGroup` 末尾收尾直接 `logger.log_group(metrics, reset=True)`，epoch 沿用绑定值
 
 ## 控制台消息
 
@@ -137,10 +139,10 @@ metrics = MetricGroup({
 })
 
 for epoch in range(epochs):
-    for _ in logger.progress(range(steps)):
+    for _ in logger.progress(range(steps), epoch=epoch):
         metrics.update(loss=loss, acc=acc, lr=lr,
                        seen=batch_size, best_acc=acc, weight=batch_size)
-    logger.log_group(metrics, epoch=epoch, reset=True)   # epoch 末：同步 + 记录 + 重置
+    logger.log_group(metrics, reset=True)   # epoch 末：同步 + 记录 + 重置（epoch 沿用绑定值）
 ```
 
 - `Mean` 是**全局加权平均**：各 rank 的 `value × weight` 求和后除以总权重，不是"各卡平均值的平均"
@@ -263,7 +265,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 
 - `scalar(metrics, step=None, epoch=None, advance=0)` — 记录一批指标；`epoch` / `step` 缺省内部自增，传入后曲线标注 epoch 分界（见上文）
 - `image(name, data, step=None, epoch=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，Web 端页签展示（见上文）
-- `progress(iterable)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上
+- `progress(iterable, epoch=None)` — tqdm 风格进度条：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch，bar 内 `scalar()` / `log_group()` 免传（见上文）
 - `log / success / error / warn` — print 风格控制台消息（图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）
 - 收尾无需手动调用：进程退出时经 atexit 自动落盘剩余指标、定稿进度条、停 Web、还原 print
 - 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.scalar(...)` 等可在任意位置直接调用（见上文）

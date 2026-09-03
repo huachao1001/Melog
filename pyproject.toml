@@ -25,4 +25,4 @@ melog = "melog.cli:main"
 include = ["melog*"]
 
 [tool.setuptools.package-data]
-"melog.web" = ["static/*"]
+"melog.web" = ["static/*", "static/css/*", "static/js/*"]

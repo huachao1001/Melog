@@ -157,6 +157,7 @@ class Melog:
         iterable: Iterable,
         description: str = "",
         total: Optional[float] = None,
+        epoch: Optional[int] = None,
         **kwargs: Any,
     ) -> tqdm:
         """tqdm 风格进度条：直接包裹可迭代对象，迭代时自动推进，无需手动 update。
@@ -165,6 +166,14 @@ class Melog:
 
             for batch in logger.progress(loader):
                 logger.scalar({"loss": loss})   # 指标实时显示在进度条上
+
+        传入 epoch 时，进入进度条即绑定该 epoch（epoch 内步数清零、全局
+        x 从上一位置接续），bar 内的 scalar() / log_group() 无需再传
+        epoch，bar 结束后沿用，直至下一个 epoch::
+
+            for epoch in range(epochs):
+                for _ in logger.progress(loader, epoch=epoch):
+                    logger.scalar({"loss": loss})
 
         进度条布局：[n/total] 最前，指标其后，条形图/百分比/耗时殿后；
         description 提供时显示在行首（默认不显示）。total 缺省时自动取
@@ -175,6 +184,11 @@ class Melog:
         """
         if self._progress is not None:
             raise RuntimeError("progress() 上下文不可嵌套")
+        with self._lock:
+            if epoch is not None and epoch != self._epoch:
+                self._epoch = epoch
+                self._epoch_step = 0
+                self._epoch_base = self._step
         disable = (not self._is_primary) or not self._enable_progress or _progress_disabled()
         bar = tqdm(iterable=iterable, total=total, desc=description, disable=disable, **kwargs)
         return self._register_progress(bar)
@@ -211,7 +225,8 @@ class Melog:
             step: 当前 epoch 内的步数；未启用 epoch 时为全局步数，
                 缺省时内部自增（epoch 模式下每个 epoch 从 0 重新计步）。
             epoch: 当前 epoch 序号，曲线图据此标注 epoch 分界；
-                缺省沿用上一次传入的值，从未传入则不记录 epoch。
+                缺省沿用当前绑定的 epoch（progress(epoch=...) 绑定或
+                上次显式传入），从未设置则不记录 epoch。
             advance: 额外推进进度条的步数（progress() 迭代每次已自动
                 推进 1，缺省 0；仅一个迭代内多次 scalar() 等场景需要传入）。
             commit: 是否推进内部 step 计数。
@@ -352,7 +367,8 @@ class Melog:
         Args:
             group: MetricGroup 实例。
             step: 当前 epoch 内的步数，缺省时内部自增。
-            epoch: 当前 epoch 序号，缺省沿用上一次传入的值。
+            epoch: 当前 epoch 序号，缺省沿用当前绑定的 epoch
+                （progress(epoch=...) 绑定或上次显式传入）。
             advance: 额外推进进度条的步数，epoch 级记录默认不推进。
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """

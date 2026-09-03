@@ -216,7 +216,7 @@ def test_media_view_loaded_switch(tmp_path):
 def logger(tmp_path):
     lg = Melog(project="m", output_dir=str(tmp_path), enable_web=False)
     yield lg
-    lg.finish()
+    lg.close()
 
 
 def test_image_attaches_to_last_scalar_position(logger):

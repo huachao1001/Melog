@@ -219,7 +219,7 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
         items = list(logger.progress(range(3), description="train"))
         assert items == [0, 1, 2]
     finally:
-        logger.finish()
+        logger.close()
     assert sys.stdout is saved_stdout
 
     log_path = next((tmp_path / "t").glob("**/console.log"))
@@ -235,7 +235,7 @@ def test_melog_progress_shows_log_postfix(tmp_path):
         for _ in logger.progress(range(2), description="train"):
             logger.scalar({"loss": 0.5})
     finally:
-        logger.finish()
+        logger.close()
     log_path = next((tmp_path / "t").glob("**/console.log"))
     assert "loss=0.5" in read(log_path)
 
@@ -248,7 +248,7 @@ def test_melog_progress_reusable_across_epochs(tmp_path):
         second = list(logger.progress(range(2), description="epoch1"))
         assert first == [0, 1] and second == [0, 1]
     finally:
-        logger.finish()
+        logger.close()
 
 
 def test_melog_progress_nesting_rejected(tmp_path):
@@ -262,7 +262,7 @@ def test_melog_progress_nesting_rejected(tmp_path):
         # close 后解除登记，可再次创建
         list(logger.progress(range(1)))
     finally:
-        logger.finish()
+        logger.close()
 
 
 def test_melog_log_advance_opt_in(tmp_path):
@@ -275,7 +275,7 @@ def test_melog_log_advance_opt_in(tmp_path):
         logger.scalar({"loss": 1.0}, advance=2)
         assert bar.n == 2
     finally:
-        logger.finish()
+        logger.close()
 
 
 def test_mirror_strips_ansi(tmp_path):
@@ -288,7 +288,7 @@ def test_mirror_strips_ansi(tmp_path):
 
 # ---------------------------------------------------------------- Melog 集成
 def test_melog_mirrors_console_log(tmp_path, capsys):
-    """训练期间 print 与进度条同步进 console.log；finish 后还原 stdout。"""
+    """训练期间 print 与进度条同步进 console.log；close 后还原 stdout。"""
     saved_stdout = sys.stdout
     logger = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     try:
@@ -297,7 +297,7 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
             logger.scalar({"loss": 0.5})
             print("step done")
     finally:
-        logger.finish()
+        logger.close()
     assert sys.stdout is saved_stdout  # 已还原
 
     log_path = next((tmp_path / "t").glob("**/console.log"))
@@ -316,6 +316,6 @@ def test_melog_console_log_progress_line_uses_cr(tmp_path):
             path = next((tmp_path / "t").glob("**/console.log"))
             assert path.read_bytes().endswith(b"\r")
     finally:
-        logger.finish()
+        logger.close()
     path = next((tmp_path / "t").glob("**/console.log"))
-    assert path.read_bytes().endswith(b"\n")  # finish 定稿
+    assert path.read_bytes().endswith(b"\n")  # close 定稿

@@ -24,8 +24,8 @@ def main():
         logger.scalar({"loss": 1.0 / (step + 1)})
         time.sleep(0.05)
 
-    logger.finish()
-    print("finish 后 print 已还原为原生行为（本行不再进 console.log）")
+    # 进程退出时自动收尾：落盘剩余指标、还原 print（本行之后的输出不再进 console.log）
+    print("演示结束，退出时自动收尾")
 
 
 if __name__ == "__main__":

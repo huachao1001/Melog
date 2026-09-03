@@ -35,7 +35,7 @@ __all__ = ["Melog", "tqdm"]
 _GREEN, _RED, _YELLOW = "\x1b[32m", "\x1b[31m", "\x1b[33m"
 _RESET = "\x1b[0m"
 
-# 被 print 拦截顶掉的原生 print，以及当前已拦截 print 的实例栈（finish 时还原）
+# 被 print 拦截顶掉的原生 print，以及当前已拦截 print 的实例栈（close 时还原）
 _ORIG_PRINT = None
 _PRINT_PATCHED: list = []
 
@@ -129,9 +129,8 @@ class Melog:
             self.log(f"Web 可视化: {self._web.url}")
         # 注册为全局活动实例（见 melog.current / 模块级 melog.log 等便捷接口）
         _set_active(self)
-        # 进程退出时自动收尾（落盘剩余指标 / 定稿进度条 / 停 Web / 还原 print），
-        # 无需显式调用 finish()
-        atexit.register(self.finish)
+        # 进程退出时自动收尾（落盘剩余指标 / 定稿进度条 / 停 Web / 还原 print）
+        atexit.register(self.close)
 
     # ------------------------------------------------------------------ 运行目录
     def _prepare_run_dir(self, output_dir: Optional[str]) -> Path:
@@ -465,17 +464,16 @@ class Melog:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     # ------------------------------------------------------------------ 收尾
-    def finish(self) -> None:
+    def close(self) -> None:
         """落盘剩余指标，定稿进度条与日志镜像，停止 Web 服务。
 
-        进程退出时经 atexit 自动调用，通常无需显式调用；仅在需要提前
-        收尾（如训练中途停掉 Web）时手动执行。若本实例是全局活动实例
-        （见 melog.current），收尾后一并清空。
+        进程退出时经 atexit 自动调用，无需手动收尾；若本实例是全局
+        活动实例（见 melog.current），收尾后一并清空。
         """
         if self._closed:
             return
         self._closed = True
-        atexit.unregister(self.finish)
+        atexit.unregister(self.close)
         if self._is_primary:
             self._flush()
         if self._progress is not None:
@@ -492,14 +490,11 @@ class Melog:
         if _get_active() is self:
             _set_active(None)
 
-    def close(self) -> None:
-        self.finish()
-
     def __enter__(self) -> "Melog":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        self.finish()
+        self.close()
 
 
 # ---------------------------------------------------------------------- 全局共享
@@ -610,12 +605,6 @@ def audio(
 def set_colors(colors: Dict[str, str]) -> None:
     """模块级便捷接口：等价于 ``current().set_colors(...)``。"""
     current().set_colors(colors)
-
-
-def finish() -> None:
-    """收尾全局活动实例（未创建时不做任何事）。"""
-    if _active is not None:
-        _active.finish()
 
 
 def _progress_disabled() -> bool:

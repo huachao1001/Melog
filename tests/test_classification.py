@@ -304,7 +304,7 @@ def test_log_group_persists_accuracy(tmp_path):
     labels = [1, 0]
     group.update(acc=(logits, labels))
     lg.log_group(group, reset=True)
-    lg.finish()
+    lg.close()
 
     path = next((tmp_path / "t").glob("**/metrics.melog"))
     records = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]

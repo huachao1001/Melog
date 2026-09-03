@@ -16,7 +16,7 @@ from melog.web.server import MetricStore
 def logger(tmp_path):
     lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
     yield lg
-    lg.finish()
+    lg.close()
 
 
 def read_log(tmp_path) -> str:
@@ -24,16 +24,16 @@ def read_log(tmp_path) -> str:
 
 
 # ---------------------------------------------------------------- 控制台消息
-def test_atexit_auto_finish_registered(tmp_path, monkeypatch):
-    """实例创建即注册 atexit 自动收尾，finish 后注销且重复调用安全。"""
+def test_atexit_auto_close_registered(tmp_path, monkeypatch):
+    """实例创建即注册 atexit 自动收尾，close 后注销且重复调用安全。"""
     import atexit
 
     registered = []
     monkeypatch.setattr(atexit, "register", lambda f: registered.append(f))
     lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
-    assert registered == [lg.finish]
-    lg.finish()
-    lg.finish()  # 幂等
+    assert registered == [lg.close]
+    lg.close()
+    lg.close()  # 幂等
 
 
 def test_console_messages(tmp_path):
@@ -46,7 +46,7 @@ def test_console_messages(tmp_path):
         lg.error("boom")
         lg.warn("careful")
     finally:
-        lg.finish()
+        lg.close()
     assert sys.stdout is saved
     text = read_log(tmp_path)
     assert "hello {'k': 2} 3\n" in text      # 多参数 + 对象 str()
@@ -57,7 +57,7 @@ def test_console_messages(tmp_path):
 
 
 def test_print_intercepted_to_log(tmp_path):
-    """官方 print 被拦截改走 log；finish 后还原；file 指定时走原生 print。"""
+    """官方 print 被拦截改走 log；close 后还原；file 指定时走原生 print。"""
     saved, orig_print = sys.stdout, builtins.print
     lg = Melog(project="test", output_dir=str(tmp_path), enable_web=False)
     try:
@@ -67,7 +67,7 @@ def test_print_intercepted_to_log(tmp_path):
         builtins.print("direct", file=sys.stderr)    # file 指定 → 原生 print
         assert builtins.print is not orig_print
     finally:
-        lg.finish()
+        lg.close()
     assert builtins.print is orig_print              # 已还原
     assert sys.stdout is saved
     text = read_log(tmp_path)
@@ -120,7 +120,7 @@ def test_scalar_records_and_persists(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False, flush_every=2)
     for step in range(5):
         lg.scalar({"loss": 1.0 / (step + 1)}, advance=1)
-    lg.finish()
+    lg.close()
 
     lines = (tmp_path / "t").glob("**/metrics.melog")
     path = next(lines)
@@ -138,7 +138,7 @@ def test_set_colors_merges_and_persists(tmp_path):
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     lg.set_colors({"recall/class_0": "#ef4444"})
     lg.set_colors({"loss": "steelblue"})  # 增量合并，不覆盖前一次
-    lg.finish()
+    lg.close()
 
     path = next((tmp_path / "t").glob("**/colors.json"))
     assert json.loads(path.read_text(encoding="utf-8")) == {
@@ -204,7 +204,7 @@ def test_explicit_epoch_step_syncs_internal_counter(logger):
 def test_epoch_records_persist_with_epoch_key(logger):
     """启用 epoch 时 JSONL 记录带 epoch 字段。"""
     logger.scalar({"a": 1.5}, epoch=2, step=5)
-    logger.finish()
+    logger.close()
     path = next(logger.run_dir.parent.glob("**/metrics.melog"))
     rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert rec == {"metric": "a", "step": 5, "value": 1.5, "epoch": 2}
@@ -213,7 +213,7 @@ def test_epoch_records_persist_with_epoch_key(logger):
 def test_no_epoch_records_omit_epoch_key(logger):
     """未启用 epoch 时 JSONL 记录不带 epoch 字段（兼容旧格式）。"""
     logger.scalar({"a": 1.0})
-    logger.finish()
+    logger.close()
     path = next(logger.run_dir.parent.glob("**/metrics.melog"))
     rec = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert rec == {"metric": "a", "step": 0, "value": 1.0}
@@ -237,21 +237,21 @@ def test_progress_returns_bar(logger):
     assert bar.n == 10  # 迭代自动推进
 
 
-def test_finish_idempotent(logger):
+def test_close_idempotent(logger):
     logger.scalar({"a": 1})
-    logger.finish()
-    logger.finish()  # 不应抛异常
+    logger.close()
+    logger.close()  # 不应抛异常
 
 
 def test_run_dir_created(tmp_path):
     lg = Melog(project="run1", output_dir=str(tmp_path), enable_web=False)
     assert (lg.run_dir).exists()
-    lg.finish()
+    lg.close()
 
 
 # ---------------------------------------------------------------- 全局共享
 def test_global_shared_instance(tmp_path):
-    """入口 init 一次，模块级接口在任何位置可用；finish 后清空活动实例。"""
+    """入口 init 一次，模块级接口在任何位置可用；close 后清空活动实例。"""
     import melog as pkg
     from melog.core import _get_active
 
@@ -263,9 +263,9 @@ def test_global_shared_instance(tmp_path):
         assert lg.store.snapshot()["a"] == [{"step": 3, "value": 1.5, "epoch": 0}]
         assert lg._colors == {"loss": "#123456"}
     finally:
-        pkg.finish()
+        lg.close()
 
-    assert _get_active() is None  # finish 清空活动实例
+    assert _get_active() is None  # close 清空活动实例
     with pytest.raises(RuntimeError):
         pkg.current()
     with pytest.raises(RuntimeError):
@@ -285,5 +285,5 @@ def test_global_reinit_switches_active_instance(tmp_path):
         first.scalar({"b": 2.0})  # 旧实例显式调用不受影响
         assert first.store.snapshot()["b"][0]["value"] == 2.0
     finally:
-        pkg.finish()  # 收尾活动实例（second）
-        first.finish()
+        second.close()  # 收尾活动实例
+        first.close()

@@ -24,10 +24,10 @@ EPOCHS = 3
 
 def main():
     rank = get_rank()
-    logger = melog.init("melog_runs/demo-multi", web_port=8666)
+    logger = melog.init("melog_runs/demo-multi")
 
     if rank == 0:
-        ws = f", Web: {logger._web.url}" if logger._web else ""
+        ws = f", Web: {logger.web_url}" if logger.web_url else ""
         print(f"world_size={get_world_size()} 分布式={is_distributed()}{ws}")
 
     metrics = MetricGroup(

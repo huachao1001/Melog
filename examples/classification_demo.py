@@ -56,11 +56,10 @@ def simulate_batch(step, rng):
 
 def main():
     rng = random.Random(7)
-    logger = melog.init("melog_runs/demo-multiclass", web_port=8666)
+    logger = melog.init("melog_runs/demo-multiclass")
     # 可选：为个别指标固定颜色（覆盖自动配色，其余仍按名称 hash 分配）
     logger.set_colors({"recall/class_2": "#ef4444", "recall/class_3": "#94a3b8"})
-    url = logger._web.url if logger._web else "未启用"
-    print(f"Web 可视化: {url} （重点看 recall / f1 / auc 三张多系列卡片，Ctrl+C 退出）")
+    print("重点看 recall / f1 / auc 三张多系列卡片，Ctrl+C 退出")
 
     metrics = MetricGroup(
         {

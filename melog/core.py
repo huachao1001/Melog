@@ -12,6 +12,7 @@ from __future__ import annotations
 import builtins
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -38,6 +39,13 @@ _ORIG_PRINT = None
 _PRINT_PATCHED: list = []
 
 
+def _free_port() -> int:
+    """向系统要一个当前空闲的 TCP 端口。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 class Melog:
     """训练监控主入口（内部实现；公开入口为 melog.init()）。
 
@@ -54,7 +62,7 @@ class Melog:
         output_dir: Optional[str] = None,
         enable_web: bool = True,
         web_host: str = "127.0.0.1",
-        web_port: int = 8666,
+        web_port: Optional[int] = None,
         enable_progress: bool = True,
         reduce_op: str = "mean",
         flush_every: int = 1,
@@ -65,7 +73,7 @@ class Melog:
             project: 项目名，作为输出子目录。
             output_dir: 指标持久化根目录，默认 ./melog_runs。
             enable_web: 是否启动 Web 可视化服务（仅 rank0 生效）。
-            web_host / web_port: Web 服务监听地址。
+            web_host: Web 服务监听地址；web_port 为 None 时自动选空闲端口。
             enable_progress: 是否启用控制台进度条（仅 rank0 生效）。
             reduce_op: 多 GPU 合并方式，"mean" 或 "sum"。
             flush_every: 每 N 次 log 落盘一次 JSONL。
@@ -74,6 +82,7 @@ class Melog:
         """
         self.project = project
         self.reduce_op = reduce_op
+        self.web_port = web_port if web_port is not None else _free_port()
         self._flush_every = max(1, flush_every)
         self._enable_progress = enable_progress
         self._rank = get_rank()
@@ -100,7 +109,7 @@ class Melog:
                 self.store,
                 media_store=self.media,
                 host=web_host,
-                port=web_port,
+                port=self.web_port,
                 max_points=max_plot_points,
                 log_file=str(self._log_file),
             )
@@ -114,6 +123,9 @@ class Melog:
             self.mirror.hook_stdio()
             # 拦截官方 print：用户代码里的 print(...) 内部改走 self.log()
             self._patch_print()
+        if self._web is not None:
+            # 端口可能随机分配，启动时打印面板地址（同步进 console.log）
+            self.log(f"Web 可视化: {self._web.url}")
         # 注册为全局活动实例（见 melog.current / 模块级 melog.log 等便捷接口）
         _set_active(self)
 
@@ -130,6 +142,11 @@ class Melog:
     @property
     def run_dir(self) -> Path:
         return self._run_dir
+
+    @property
+    def web_url(self) -> Optional[str]:
+        """Web 面板地址（未启用 Web 时为 None）。"""
+        return self._web.url if self._web is not None else None
 
     # ------------------------------------------------------------------ 训练上下文
     def progress(
@@ -500,13 +517,13 @@ def current() -> "Melog":
     return _active
 
 
-def init(log_dir: str = "./melog_runs", web_port: int = 8666, **kwargs: Any) -> Melog:
+def init(log_dir: str = "./melog_runs", web_port: Optional[int] = None, **kwargs: Any) -> Melog:
     """创建并激活全局共享的 Melog 实例（melog 的唯一公开入口）。
 
     Args:
         log_dir: 日志保存路径；本次运行的指标 / 媒体 / console.log 落在
             其下的时间戳子目录中，路径末级目录名作为项目名展示。
-        web_port: Web 监听端口。
+        web_port: Web 监听端口；缺省自动选择一个空闲端口。
         **kwargs: 其余高级参数（enable_web / enable_progress / reduce_op /
             flush_every / max_plot_points，以及 project 覆盖项目名等）。
 

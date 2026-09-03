@@ -1,7 +1,7 @@
 ﻿"""单进程训练示例：控制台进度条 + Web 可视化。
 
 运行：python examples/single_gpu_train.py
-浏览器打开 http://127.0.0.1:8666 查看实时曲线。
+浏览器打开启动时打印的 Web 地址查看实时曲线。
 """
 
 import math
@@ -14,8 +14,7 @@ STEPS = 50
 
 
 def main():
-    logger = melog.init("melog_runs/demo-single", web_port=8666)
-    print(f"Web 可视化: {logger._web.url if logger._web else '未启用'}")
+    logger = melog.init("melog_runs/demo-single")
 
     for epoch in range(EPOCHS):
         # 每个 epoch 一条进度条；每步恰好 log 一次，step 自动计数无需传

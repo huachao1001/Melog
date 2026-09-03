@@ -80,6 +80,7 @@ class Mirror:
         self._bar_start = 0  # 进度条行起始字节偏移
         self._last_write = 0.0
         self._saved: Tuple = ()
+        self._stdout_tee = None
         self._hooked = False
         self._file = self._open()
 
@@ -88,7 +89,11 @@ class Mirror:
         """接收一段控制台输出（原样，含 \\r / \\n），按协议写入文件。
 
         ANSI 颜色/控制码在落盘前剥离：终端保持主题色，日志文件纯文本。
+        多实例场景下本镜像可能已随 finish 关闭（stdio 链仍串着旧分流器），
+        此时静默丢弃，不再向已关闭文件写入。
         """
+        if self._file.closed:
+            return
         text = _ANSI_RE.sub("", text)
         if not text:
             return
@@ -189,16 +194,24 @@ class Mirror:
         if self._hooked:
             return
         self._saved = (sys.stdout, sys.stderr)
-        sys.stdout = _Tee(sys.stdout, self)
+        self._stdout_tee = _Tee(sys.stdout, self)
+        sys.stdout = self._stdout_tee
         sys.stderr = _Tee(sys.stderr, self)
         self._hooked = True
 
     def unhook_stdio(self) -> None:
-        """还原接管前的标准输入输出。"""
+        """还原接管前的标准输入输出。
+
+        多实例嵌套接管时（新实例的分流器包在本实例之外），stdout 已不归
+        本实例所有，此时只解除自身标记、不动 sys.stdout，交给最外层实例
+        统一还原。
+        """
         if not self._hooked:
             return
-        sys.stdout, sys.stderr = self._saved
+        if sys.stdout is self._stdout_tee:
+            sys.stdout, sys.stderr = self._saved
         self._saved = ()
+        self._stdout_tee = None
         self._hooked = False
 
     @property

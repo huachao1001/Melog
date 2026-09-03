@@ -1,7 +1,7 @@
 ﻿"""Web 展示测试脚本：持续推送多组指标，供浏览器实时查看曲线。
 
 运行：python examples/web_demo.py
-浏览器打开 http://127.0.0.1:8666，应看到 loss/acc/lr/grad_norm 四条实时曲线。
+浏览器打开启动时打印的 Web 地址，应看到 loss/acc/lr/grad_norm 四条实时曲线。
 按 Ctrl+C 停止。
 """
 
@@ -16,9 +16,8 @@ INTERVAL = 0.5     # 每 0.5s 推送一次
 
 
 def main():
-    logger = melog.init("melog_runs/web-demo", web_port=8666)
-    url = logger._web.url if logger._web else "未启用"
-    print(f"Web 可视化: {url} （浏览器打开查看实时曲线，Ctrl+C 退出）")
+    logger = melog.init("melog_runs/web-demo")
+    print("浏览器打开查看实时曲线，Ctrl+C 退出")
 
     try:
         for step in logger.progress(range(STEPS)):

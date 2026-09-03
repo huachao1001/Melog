@@ -26,7 +26,8 @@ pip install -e .            # 基础安装
 ```python
 import melog
 
-logger = melog.init("runs/my-exp", web_port=8666)   # 日志保存路径 + 端口，全局唯一入口
+logger = melog.init("runs/my-exp")   # 日志保存路径；端口缺省自动选空闲端口
+                                     # Web 地址启动时自动打印，也可读 logger.web_url
 
 for step in logger.progress(range(1000)):     # tqdm 风格：自动推进，无需手动 update
     loss = train_one_step()
@@ -35,7 +36,7 @@ for step in logger.progress(range(1000)):     # tqdm 风格：自动推进，无
 logger.finish()   # 落盘剩余指标并停止 Web 服务
 ```
 
-训练期间浏览器打开 `http://127.0.0.1:8666` 查看实时曲线。
+训练期间浏览器打开启动时打印的 Web 地址（即 `logger.web_url`）查看实时曲线。
 
 ## 全局共享
 
@@ -45,7 +46,7 @@ logger.finish()   # 落盘剩余指标并停止 Web 服务
 ```python
 import melog
 
-logger = melog.init(log_dir="runs/my-exp", web_port=8666)   # 日志保存路径 + 端口
+logger = melog.init(log_dir="runs/my-exp")   # 日志保存路径；端口缺省自动选空闲端口
 
 # 任意其他模块中：
 import melog
@@ -246,7 +247,7 @@ torchrun --nproc_per_node=4 examples/multi_gpu_train.py
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `log_dir` | `./melog_runs` | 日志保存路径；本次运行落在其下时间戳子目录，末级目录名即项目名 |
-| `web_port` | `8666` | Web 监听端口（`web_host` 默认 `127.0.0.1`） |
+| `web_port` | 随机空闲端口 | Web 监听端口（`web_host` 默认 `127.0.0.1`，地址启动时自动打印，也可读 `logger.web_url`） |
 | `enable_web` | `True` | 启动 Web 服务（仅 rank0） |
 | `enable_progress` | `True` | 启用控制台进度条 |
 | `reduce_op` | `"mean"` | 多 GPU 合并方式 |

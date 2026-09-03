@@ -53,8 +53,8 @@ def make_audio(step: int, total: int, sr: int = 22050) -> np.ndarray:
 
 
 def main():
-    logger = melog.init("melog_runs/demo-media", web_port=8666)   # 日志保存路径 + 端口
-    print(f"Web 可视化: {logger._web.url if logger._web else '未启用'} （页签切换 曲线/图像/音频，Ctrl+C 退出）")
+    logger = melog.init("melog_runs/demo-media")   # 日志保存路径；Web 地址启动时自动打印
+    print("页签切换 曲线/图像/音频，Ctrl+C 退出")
 
     total = EPOCHS * STEPS
     try:

@@ -371,48 +371,6 @@ melog                              # 缺省在 ./melog_runs 中查找
 melog F:/runs/exp1 --port 9000 --no-browser  # 自定义端口 / 不开浏览器
 ```
 
-## 项目结构
-
-```text
-melog/
-├── __init__.py      # 包入口：公开 API 导出
-├── core.py          # Melog 主类：组合组件、调度记录、生命周期
-├── api/             # 全局入口 melog.init() + 模块级便捷接口（melog.scalar 等）
-├── cli/             # 命令行入口：melog <path>
-├── tracking/        # 训练记录上下文
-│   ├── axis.py      # Axis：全局 x / epoch 坐标的唯一裁决者
-│   ├── steps_bar.py # StepsBar：tqdm 风格训练进度条（epoch 绑定 + 自动记录）
-│   └── console.py   # Console：控制台消息（log/success/error/warn）+ print 拦截
-├── storage/         # 持久化与产物
-│   ├── journal.py   # Journal：二进制日志落盘（批量写 + 即时追加 + 截断）
-│   ├── melog_file.py  # MelogFile：melog 二进制容器（符号表 + varint 编码 / 读取 / 重叠截断）
-│   ├── media.py     # 图像/音频落盘编码（路径复制或数组编码）
-│   ├── media_log.py # MediaLog：媒体记录流程（定位->落盘->索引->日志->推送）
-│   └── mirror.py    # Mirror：控制台日志镜像（进度条就地刷新 + stdio 接管）
-├── metrics/         # 指标计算与跨 GPU 同步
-│   ├── base.py      # Metric 基类：compute 实时出值 / prepare+compute epoch 出值
-│   ├── basic.py     # Mean / Sum / Last / Count
-│   ├── classification.py  # Accuracy / Precision / Recall / F1 / ConfusionMatrix
-│   └── group.py     # MetricGroup：具名指标集合
-├── web/             # Web 可视化面板
-│   ├── server.py    # WebServer：uvicorn 线程生命周期
-│   ├── app.py       # ApiRoutes：路由注册（指标/媒体/文件浏览/加载/WS）
-│   ├── store.py     # MetricStore：内存指标历史
-│   ├── view.py      # MetricView：实时/历史视图切换
-│   ├── media_store.py  # MediaStore：实时媒体索引
-│   ├── media_view.py   # MediaView：媒体视图切换 + 文件白名单解析
-│   ├── fs.py        # FileBrowser：文件浏览
-│   ├── loader.py    # LogLoader / MediaLoader：二进制日志解析与会话合并
-│   ├── ws.py        # WsHub：WebSocket 广播
-│   └── static/      # 前端（js 按类分模块）
-└── utils/           # 通用工具类
-    ├── tqdm.py               # 自研进度条（tqdm 兼容，样式重设计）
-    ├── downsample.py         # 曲线降采样
-    ├── distributed.py        # 多 GPU all_reduce / all_gather 原语
-    ├── bar_stack.py          # BarStack / BarFrame：进度条栈帧管理（嵌套、恢复渲染）
-    └── epoch_end_iterable.py # EpochEndIterable：自然耗尽触发回调的迭代包装
-```
-
 ## 开发
 
 ```bash

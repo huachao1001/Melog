@@ -92,14 +92,21 @@ class MetricGroup:
                         metric.feed(**args)
             else:
                 for name, metric in self._metrics.items():
-                    if name not in named:
+                    if name not in named and self._dispatchable(metric):
                         metric.feed(*args)
         if self._on_feed is not None:
             self._on_feed(write)
 
     @staticmethod
-    def _accepts(metric: Metric, args: Dict[str, Any]) -> bool:
+    def _dispatchable(metric: Any) -> bool:
+        """是否为具备 _entry 协议的 Metric（Last 等鸭子类型只按注册名喂）。"""
+        return hasattr(metric, "_entry")
+
+    @staticmethod
+    def _accepts(metric: Any, args: Dict[str, Any]) -> bool:
         """指标的 compute / prepare 形参名是否与 args 的键匹配。"""
+        if not MetricGroup._dispatchable(metric):
+            return False
         specs = _param_specs(metric._entry())
         return bool(args) and (
             any(name in args for name, _k, _d in specs)

@@ -104,6 +104,15 @@ melog.warn("学习率过大")          # 黄色 ⚠
 自动带上图标/配色并同步进 console.log，进程退出收尾后还原原生 print。颜色仅在真实
 终端（TTY）启用，重定向 / console.log 始终纯文本。
 
+多 GPU 下日志消息**默认仅 rank0 输出**（与指标记录一致，避免 N 卡重复刷屏）；
+调试需要各卡都打印时传 `all_ranks=True`（非主卡仅上终端，不进 console.log——
+镜像只在 rank0 挂载）：
+
+```python
+melog.log("只有 rank0 打印")                     # 默认：其余卡静默
+melog.log("每个卡都打印自己的 local 值", all_ranks=True)  # 调试用
+```
+
 ## 记录图像与音频
 
 除指标曲线外，Web 端 header 可在 **曲线 / 图像 / 音频** 三个页签间切换。图像与音频用
@@ -354,7 +363,7 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 - `StepsBar(iterable, epoch=None, metrics=None)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录并重置组内指标（提前 break / 异常不触发）（见上文）
 - 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break / 抛异常时 bar 自动出栈（如需立即定稿可 `close()` 或用 with），否则等引用释放时兜底
 - `current_bar()` — 当前栈顶进度条（无打开的 bar 时 `None`）；深层函数需要手动推进 / 读数 / 写 postfix 时取它，免层层传参
-- `log / success / error / warn` — print 风格控制台消息（`[MM-DD HH:MM:SS][文件名]` 前缀 + 图标 + 彩色文字），`print` 被拦截改走 `log()`（见上文）
+- `log / success / error / warn` — print 风格控制台消息（`[MM-DD HH:MM:SS][文件名]` 前缀 + 图标 + 彩色文字），`print` 被拦截改走 `log()`；多 GPU 下默认仅 rank0 输出，`all_ranks=True` 时各卡都输出（见上文）
 - 收尾无需手动调用：进程退出时经 atexit 自动落盘剩余指标、定稿进度条、停 Web、还原 print
 - 全局共享：`melog.init(...)` 创建活动实例后，模块级 `melog.scalar(...)` 等可在任意位置直接调用（见上文）
 

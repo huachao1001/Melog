@@ -73,24 +73,28 @@ def scalar(
     return current().scalar(metrics, advance=advance)
 
 
-def log(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+def log(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+        all_ranks: bool = False) -> None:
     """模块级便捷接口：等价于 ``current().log(...)``。"""
-    current().log(*values, sep=sep, end=end, flush=flush)
+    current().log(*values, sep=sep, end=end, flush=flush, all_ranks=all_ranks)
 
 
-def success(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+def success(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+            all_ranks: bool = False) -> None:
     """模块级便捷接口：等价于 ``current().success(...)``。"""
-    current().success(*values, sep=sep, end=end, flush=flush)
+    current().success(*values, sep=sep, end=end, flush=flush, all_ranks=all_ranks)
 
 
-def error(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+def error(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+          all_ranks: bool = False) -> None:
     """模块级便捷接口：等价于 ``current().error(...)``。"""
-    current().error(*values, sep=sep, end=end, flush=flush)
+    current().error(*values, sep=sep, end=end, flush=flush, all_ranks=all_ranks)
 
 
-def warn(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+def warn(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+         all_ranks: bool = False) -> None:
     """模块级便捷接口：等价于 ``current().warn(...)``。"""
-    current().warn(*values, sep=sep, end=end, flush=flush)
+    current().warn(*values, sep=sep, end=end, flush=flush, all_ranks=all_ranks)
 
 
 def current_bar() -> Optional[tqdm]:

@@ -442,24 +442,49 @@ class Melog:
             self._web.set_colors(dict(self._colors))
 
     # ------------------------------------------------------------------ 控制台消息
-    def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+            all_ranks: bool = False) -> None:
         """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。
 
         实例存活期间官方 print 被拦截到本方法；多个参数自动转 str()
         后以 sep 拼接。
+
+        多 GPU 下默认仅 rank0 输出（避免 N 卡重复刷屏）；传
+        all_ranks=True 时各卡都输出（非主卡仅上终端，不进 console
+        日志镜像——镜像只在 rank0 挂载）。
         """
+        if not all_ranks and not self._is_primary:
+            return
         self._console.log(*values, sep=sep, end=end, flush=flush)
 
-    def success(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """绿色文字 + ✔ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
+    def success(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+                all_ranks: bool = False) -> None:
+        """绿色文字 + ✔ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。
+
+        多 GPU 下默认仅 rank0 输出；all_ranks=True 时各卡都输出。
+        """
+        if not all_ranks and not self._is_primary:
+            return
         self._console.success(*values, sep=sep, end=end, flush=flush)
 
-    def error(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """红色文字 + ✘ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
+    def error(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+              all_ranks: bool = False) -> None:
+        """红色文字 + ✘ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。
+
+        多 GPU 下默认仅 rank0 输出；all_ranks=True 时各卡都输出。
+        """
+        if not all_ranks and not self._is_primary:
+            return
         self._console.error(*values, sep=sep, end=end, flush=flush)
 
-    def warn(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """黄色文字 + ⚠ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
+    def warn(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False,
+             all_ranks: bool = False) -> None:
+        """黄色文字 + ⚠ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。
+
+        多 GPU 下默认仅 rank0 输出；all_ranks=True 时各卡都输出。
+        """
+        if not all_ranks and not self._is_primary:
+            return
         self._console.warn(*values, sep=sep, end=end, flush=flush)
 
     def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:

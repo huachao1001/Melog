@@ -91,6 +91,16 @@ class WebServer:
             payload["epoch"] = epoch
         self.hub.publish(payload)
 
+    def publish_categories(self, categories) -> None:
+        """线程安全：广播新增的大类别（前端据此划分卡片分区）。"""
+        self.view.add_categories(categories)
+        self.hub.publish({"type": "categories", "categories": sorted(self.view.categories)})
+
+    def set_categories(self, categories) -> None:
+        """线程安全：设置大类别集合（历史恢复时整体替换）并广播。"""
+        self.view.set_categories(categories)
+        self.hub.publish({"type": "categories", "categories": sorted(self.view.categories)})
+
     def set_colors(self, colors: Dict[str, str]) -> None:
         """线程安全：更新用户指定颜色（指标名 -> CSS 颜色）并广播。"""
         self.view.set_colors(colors)
@@ -98,7 +108,8 @@ class WebServer:
 
     def broadcast_history(self) -> None:
         """线程安全：向所有面板广播全量历史（续训截断重叠区后整体替换）。"""
-        self.hub.publish({"type": "history", "metrics": self.view.snapshot()})
+        self.hub.publish({"type": "history", "metrics": self.view.snapshot(),
+                          "categories": sorted(self.view.categories)})
 
     def publish_media(self, kind: str, name: str, step: int, epoch: Optional[int],
                       relpath: str, sr: Optional[int] = None,

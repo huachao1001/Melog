@@ -49,10 +49,20 @@ class MetricGroup:
     识别样本数（批次大小），Mean 按它精确平均，feed 无需传元组；识别
     失败（如迭代 range）回退等权平均并警告一次。显式传 (值, 观测数)
     元组时以显式值优先。
+
+    category 大类别：传入 category（如 "train" / "val" / "test"）时，
+    同一套指标定义按大类别区分——记录的指标名自动加该前缀
+    （``f"{category}/{name}"``，如 train/loss），Web 面板把不同
+    category 的卡片分到独立分区垂直排列；分区内仍按指标名分卡
+    （"recall/class_0" 式逐类命名照常合并为多系列）。category 与
+    指标名的对应关系由框架显式记录（不靠命名识别），历史日志重新
+    加载时一并恢复。
     """
 
-    def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
+    def __init__(self, metrics: Optional[Dict[str, Metric]] = None,
+                 category: Optional[str] = None):
         self._metrics: Dict[str, Metric] = dict(metrics or {})
+        self._category = category  # 大类别（train/val/test）：记录时自动加为指标名前缀
         # 每次 feed() 后触发的回调（由 StepsBar 挂载，用于进度条实时显示本地值）
         self._on_feed: Optional[Callable[[bool], None]] = None
         # StepsBar 每次迭代自动注入的当前批次样本数（None = 未知，等权）
@@ -134,9 +144,14 @@ class MetricGroup:
         """当前 rank 的本地指标值（零通信，不触发跨 rank 收集），供实时显示。
 
         等价于把本 rank 状态单方面合并：无观测的指标为 NaN；返回矩阵的
-        指标（如 ConfusionMatrix）原样返回，调用方可按需过滤。
+        指标（如 ConfusionMatrix）原样返回，调用方可按需过滤。设置了
+        category 时键带 ``category/`` 前缀（与 _compute 记录名一致）。
         """
-        return {name: m.merge_states([m.state()]) for name, m in self._metrics.items()}
+        return {
+            (f"{self._category}/{name}" if self._category else name):
+                m.merge_states([m.state()])
+            for name, m in self._metrics.items()
+        }
 
     def _compute(self) -> Dict[str, Any]:
         """同步合并组内全部指标并返回全局结果（内部方法，由 scalar 调用）。
@@ -147,19 +162,21 @@ class MetricGroup:
         结果规整（scalar 只收数值）：
         - compute 返回 dict 的指标（prepare 型多输出，如 precision/recall/f1）
           展平为 ``{name}/{k}``；
+        - 设置了 category 时键带 ``category/`` 前缀；
         - NaN / inf 与非数值结果（如 ConfusionMatrix 的矩阵）跳过不进记录。
         """
         names = list(self._metrics)
         states = gather_object([self._metrics[name].state() for name in names])
         out: Dict[str, Any] = {}
         for i, name in enumerate(names):
+            key = f"{self._category}/{name}" if self._category else name
             v = self._metrics[name].merge_states([state[i] for state in states])
             if isinstance(v, dict):
                 for k, kv in v.items():
                     if _is_finite_number(kv):
-                        out[f"{name}/{k}"] = kv
+                        out[f"{key}/{k}"] = kv
             elif _is_finite_number(v):
-                out[name] = v
+                out[key] = v
         return out
 
     def reset(self) -> None:

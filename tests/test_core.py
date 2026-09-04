@@ -279,7 +279,7 @@ def test_stepsbar_feed_auto_records_local(lg):
     assert [r["value"] for r in snap[:4]] == [1.0, 1.5, 2.0, 2.5]  # 运行均值
     assert snap[4]["value"] == pytest.approx(2.5)  # epoch 末全局合并值
     assert [r["step"] for r in snap] == [0, 1, 2, 3, 4]
-    assert group._compute() != group._compute()  # 已重置 -> NaN
+    assert group._compute() == {}  # 已重置 -> 无观测数据（NaN 不进记录）
 
 
 def test_stepsbar_auto_log_each_epoch(lg):
@@ -417,7 +417,7 @@ def test_stepsbar_realtime_postfix(lg):
     # 自然结束：gather 全局值落盘并重置；曲线得到精确结果
     # 曲线 = 两次 feed 的本地记录 + 末尾全局记录
     assert [r["value"] for r in lg.store.snapshot()["m"]] == [1.0, 2.0, 2.0]
-    assert group._compute() != group._compute()  # 已重置 -> NaN
+    assert group._compute() == {}  # 已重置 -> 无观测数据（NaN 不进记录）
 
 
 def test_stepsbar_feed_write_false(lg):
@@ -434,7 +434,7 @@ def test_stepsbar_feed_write_false(lg):
     assert len(snap) == 1  # 无逐 feed 本地记录，仅 epoch 末全局记录
     # 全局值含循环前的观测：(1.0 + 2.0*3) / 4
     assert snap[0]["value"] == pytest.approx(1.75)
-    assert group._compute() != group._compute()  # 已重置 -> NaN
+    assert group._compute() == {}  # 已重置 -> 无观测数据（NaN 不进记录）
 
 
 def test_feed_without_bar_needs_manual_scalar(lg):

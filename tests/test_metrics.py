@@ -384,3 +384,45 @@ def test_multi_rank_gloo(tmp_path):
     r1 = json.loads((tmp_path / "rank1.json").read_text(encoding="utf-8"))
     # 全局加权平均: (2*2 + 1*1) / (2+1)；求和: 3+6
     assert r0 == r1 == {"loss": pytest.approx(5.0 / 3.0), "total": pytest.approx(9.0)}
+
+
+def test_group_category_prefixes_record_names(tmp_path):
+    """MetricGroup(category=...)：记录名自动加类别前缀，local 同步带前缀。"""
+    lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
+    train = MetricGroup({"loss": Mean(), "recall/class_0": Mean()}, category="train")
+    val = MetricGroup({"loss": Mean()}, category="val")
+    train.feed(loss=1.0, **{"recall/class_0": 0.5})
+    lg.scalar(train)
+    val.feed(loss=2.0)
+    lg.scalar(val)
+    lg.close()
+
+    from melog.storage.melog_file import MelogFileReader
+
+    path = next((tmp_path / "t").glob("*metrics-*.melog"))
+    records = list(MelogFileReader(path).records())
+    assert records == [
+        (0, None, {"train/loss": 1.0, "train/recall/class_0": 0.5}),
+        (1, None, {"val/loss": 2.0}),
+    ]
+    assert set(train.local()) == {"train/loss", "train/recall/class_0"}
+    # 类别声明随日志持久化
+    cats = [r for r in MelogFileReader(path).media() if r.get("type") == "category"]
+    assert {r["name"] for r in cats} == {"train", "val"}
+
+
+def test_group_without_category_unchanged(tmp_path):
+    """不传 category：行为与旧版完全一致（名字不加前缀）。"""
+    lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
+    group = MetricGroup({"loss": Mean()})
+    group.feed(loss=1.0)
+    lg.scalar(group)
+    lg.close()
+
+    from melog.storage.melog_file import MelogFileReader
+
+    path = next((tmp_path / "t").glob("*metrics-*.melog"))
+    records = list(MelogFileReader(path).records())
+    assert records == [(0, None, {"loss": 1.0})]
+    cats = [r for r in MelogFileReader(path).media() if r.get("type") == "category"]
+    assert cats == []

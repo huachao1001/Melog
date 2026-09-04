@@ -98,12 +98,14 @@ class ApiRoutes:
             return JSONResponse(status_code=400, content={"error": "文件中没有可解析的指标"})
         run_dir = files[0].parent
         colors = self._read_colors(run_dir)  # 该日志运行时的用户指定颜色（如有）
+        categories = self.loader.categories(files)  # 日志中声明的大类别
         media = self._read_media(files)
-        self.view.set_loaded(series, colors)
+        self.view.set_loaded(series, colors, categories)
         if self.media_view is not None:
             self.media_view.set_loaded(media, run_dir)
         self.default_dir = str(run_dir)  # 默认浏览目录跟随当前展示日志
-        await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
+        await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot(),
+                                  "categories": sorted(self.view.categories)})
         await self.hub.broadcast({"type": "colors", "colors": colors})
         await self._broadcast_media_history()
         return {"ok": True, "count": len(series), "path": str(files[0])}
@@ -114,7 +116,8 @@ class ApiRoutes:
         if self.media_view is not None:
             self.media_view.clear_loaded()
         self.default_dir = self.initial_default
-        await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot()})
+        await self.hub.broadcast({"type": "history", "metrics": self.view.snapshot(),
+                                  "categories": sorted(self.view.categories)})
         await self.hub.broadcast({"type": "colors", "colors": self.view.colors})
         await self._broadcast_media_history()
         return {"ok": True}
@@ -148,8 +151,9 @@ class ApiRoutes:
         await websocket.accept()
         self.hub.attach(websocket)
         try:
-            # 建连即补发全量历史（降采样后），避免前端漏数据；随后下发颜色与媒体索引
-            await websocket.send_json({"type": "history", "metrics": self.view.snapshot()})
+            # 建连即补发全量历史（降采样后），避免前端漏数据；随后下发类别、颜色与媒体索引
+            await websocket.send_json({"type": "history", "metrics": self.view.snapshot(),
+                                       "categories": sorted(self.view.categories)})
             await websocket.send_json({"type": "colors", "colors": self.view.colors})
             if self.media_view is not None:
                 await websocket.send_json({"type": "media_history", "media": self.media_view.snapshot()})

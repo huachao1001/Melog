@@ -146,6 +146,8 @@ class StepsBar(tqdm):
             raise TypeError(f"metrics 须为 MetricGroup，收到 {type(metrics).__name__}")
         if on_end is not None and metrics is None:
             raise ValueError("on_end 需配合 metrics 使用（回调参数为合并后的指标）")
+        if metrics is not None and metrics._category:
+            host._announce_category(metrics._category)  # 大类别声明（幂等）
         if epoch is not None:
             host._bind_epoch(epoch)  # 续训时该 epoch 已有记录会先截断重叠区
         if metrics is not None:

@@ -4,6 +4,10 @@
  * 同组指标合并为一张多系列卡片（多分类逐类曲线一图对比），legend 显示
  * 去掉分组前缀后的系列名；无 '/' 的指标保持单系列卡片，外观与旧版一致。
  *
+ * 大类别分区（train/val/test）：后端显式声明类别集合，指标名首段命中
+ * 类别时归入该分区的垂直分块（分区内仍按上述规则分卡），未命中走
+ * 原有分组——类别靠显式声明识别，不靠命名猜测。
+ *
  * 配色按名称 hash（FNV-1a）从调色板选取：同一指标名恒定同色（刷新/
  * 重建后不变），不同卡片/系列颜色错开；组内碰撞时向后顺延避免同卡撞色。
  */
@@ -20,21 +24,33 @@ export class ChartManager {
     this.palette = palette;
     this.themeProvider = themeProvider;  // () => { axis, split } 当前主题坐标轴配色
     this.downsampler = new PointDownsampler(maxPoints);
-    this.charts = {};   // 分组名 -> echarts 实例
-    this.data = {};     // 分组名 -> { 完整指标名 -> [{step, value}] }
+    this.charts = {};   // 卡片键 -> echarts 实例
+    this.data = {};     // 卡片键 -> { 完整指标名 -> [{step, value}] }
     this.colors = {};   // 指标名 -> 用户指定颜色（覆盖 hash 自动配色）
+    this.categories = new Set();  // 大类别（train/val/test）：命中首段前缀的指标归入分区
+    this.sections = {}; // 卡片键 -> 所属分区名（重建时恢复分区归属）
     window.addEventListener('resize', () => this.resizeAll());
   }
 
-  /** 处理 WebSocket 消息：history 全量替换 / update 增量追加 / colors 用户配色。 */
+  /** 处理 WebSocket 消息：history 全量替换 / update 增量追加 / colors 用户配色 / categories 大类别。 */
   handle(msg) {
     if (msg.type === 'history') {
+      if (Array.isArray(msg.categories)) this.#setCategories(msg.categories);
       for (const [name, pts] of Object.entries(msg.metrics)) this.upsert(name, pts);
     } else if (msg.type === 'update') {
       for (const [name, value] of Object.entries(msg.metrics)) this.append(name, msg.step, value, msg.epoch);
+    } else if (msg.type === 'categories') {
+      if (Array.isArray(msg.categories)) this.#setCategories(msg.categories);
     } else if (msg.type === 'colors') {
       this.setColors(msg.colors);
     }
+  }
+
+  /** 更新大类别集合；集合变化会改变指标名到分区的归属，已建卡片按新归属重建。 */
+  #setCategories(list) {
+    const before = this.categories.size;
+    for (const c of list) this.categories.add(c);
+    if (this.categories.size !== before) this.regroupAll();
   }
 
   /** 应用用户指定颜色（增量合并），已建卡片立即重新着色。 */
@@ -53,6 +69,59 @@ export class ChartManager {
   #labelOf(name) {
     const g = this.#groupOf(name);
     return g === name ? name : name.slice(g.length + 1);
+  }
+
+  /** 指标名 -> { 卡片键, 分区名 }。
+   *
+   * 首段命中大类别（train/val/test）时归入该分区的垂直分块：卡片键 =
+   * "类别/指标前缀"（分区隔离同名卡片），分区名用于建分区容器；
+   * 未命中保持原行为（按最后一个 '/' 前缀分组，无分区）。
+   */
+  #layoutOf(name) {
+    const i = name.indexOf('/');
+    if (i > 0) {
+      const section = name.slice(0, i);
+      if (this.categories.has(section)) {
+        const rest = name.slice(i + 1);
+        return { card: `${section}/${this.#groupOf(rest)}`, section };
+      }
+    }
+    return { card: this.#groupOf(name), section: null };
+  }
+
+  /** 系列显示名：分区指标去掉类别前缀后，再去掉卡片分组前缀。 */
+  #seriesLabel(name) {
+    const i = name.indexOf('/');
+    if (i > 0 && this.categories.has(name.slice(0, i))) {
+      const rest = name.slice(i + 1);
+      return this.#labelOf(rest);
+    }
+    return this.#labelOf(name);
+  }
+
+  /** 大类别集合变化后，把已建卡片按新归属重排（清 DOM 重建，保留数据与缩放）。 */
+  regroupAll() {
+    this.sections = {};
+    const zooms = {};
+    for (const [group, ch] of Object.entries(this.charts)) {
+      const opt = ch.getOption();
+      if (opt && opt.dataZoom && opt.dataZoom[0]) zooms[group] = { start: opt.dataZoom[0].start, end: opt.dataZoom[0].end };
+      ch.dispose();
+      delete this.charts[group];
+    }
+    document.querySelectorAll('#charts .card, #charts .cat').forEach((el) => el.remove());
+    for (const group of Object.keys(this.data)) {
+      const section = this.#sectionOfCard(group);
+      this.ensureChart(group, section);
+      this.#syncSeries(group);
+      if (zooms[group]) this.charts[group].dispatchAction({ type: 'dataZoom', start: zooms[group].start, end: zooms[group].end });
+    }
+  }
+
+  /** 由卡片键反推分区名（键为 "类别/指标前缀" 且首段是已知类别时命中）。 */
+  #sectionOfCard(card) {
+    const i = card.indexOf('/');
+    return i > 0 && this.categories.has(card.slice(0, i)) ? card.slice(0, i) : null;
   }
 
   /** FNV-1a 字符串 hash（32 位无符号），用于按名称稳定选色。
@@ -81,13 +150,29 @@ export class ChartManager {
     return this.palette[idx];
   }
 
-  ensureChart(group) {
+  ensureChart(group, section = null) {
     if (this.charts[group]) return this.charts[group];
     document.getElementById('empty')?.remove();
+    let parent = document.getElementById('charts');
+    if (section) {
+      // 大类别分区：标题 + 独立网格，垂直分块；卡片进分区内的网格
+      let block = document.querySelector(`#charts .cat[data-cat="${CSS.escape(section)}"]`);
+      if (!block) {
+        block = document.createElement('div');
+        block.className = 'cat';
+        block.dataset.cat = section;
+        block.innerHTML = `<h2>${section}</h2><div class="cat-grid"></div>`;
+        parent.appendChild(block);
+      }
+      parent = block.querySelector('.cat-grid');
+    }
+    this.sections[group] = section;
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = `<h3>${group}</h3><div class="chart"></div>`;
-    document.getElementById('charts').appendChild(card);
+    // 分区卡标题去掉类别前缀（分区标题已含类别）：train/loss 卡显示 "loss"
+    const title = section ? group.slice(section.length + 1) : group;
+    card.innerHTML = `<h3>${title}</h3><div class="chart"></div>`;
+    parent.appendChild(card);
     const el = card.querySelector('.chart');
     const chart = echarts.init(el);
     const t = this.themeProvider();
@@ -98,23 +183,23 @@ export class ChartManager {
   }
 
   upsert(name, points) {
-    const group = this.#groupOf(name);
-    this.ensureChart(group);
-    this.data[group][name] = points;
-    this.#syncSeries(group);
+    const { card, section } = this.#layoutOf(name);
+    this.ensureChart(card, section);
+    this.data[card][name] = points;
+    this.#syncSeries(card);
   }
 
   append(name, step, value, epoch) {
-    const group = this.#groupOf(name);
-    this.ensureChart(group);
-    const pts = this.data[group][name] || [];
+    const { card, section } = this.#layoutOf(name);
+    this.ensureChart(card, section);
+    const pts = this.data[card][name] || [];
     pts.push(epoch == null ? { step, value } : { step, value, epoch });
     if (pts.length > this.downsampler.maxPoints) {
-      this.data[group][name] = this.downsampler.downsample(pts);
+      this.data[card][name] = this.downsampler.downsample(pts);
     } else {
-      this.data[group][name] = pts;
+      this.data[card][name] = pts;
     }
-    this.#syncSeries(group);
+    this.#syncSeries(card);
   }
 
   /** 组内全部系列按出现顺序写入图表，legend / 网格留白同步增删。 */
@@ -141,7 +226,7 @@ export class ChartManager {
       series[0].markLine = marks.length ? this.#markLineOption(marks) : { data: [] };
     }
     chart.setOption({
-      legend: { show: multi, data: names.map((n) => this.#labelOf(n)) },
+      legend: { show: multi, data: names.map((n) => this.#seriesLabel(n)) },
       grid: { top: multi ? 36 : 20 },
       series,
     });
@@ -197,7 +282,7 @@ export class ChartManager {
     const pts = this.data[group][name] || [];
     return {
       id: name,  // 以完整指标名为 id，setOption 按 id 合并，后出现的系列不打乱已有系列
-      name: this.#labelOf(name),
+      name: this.#seriesLabel(name),
       type: 'line',
       showSymbol: false,
       smooth: true,
@@ -210,7 +295,7 @@ export class ChartManager {
     };
   }
 
-  /** 主题切换后销毁重建全部图表，保留缩放状态。 */
+  /** 主题切换后销毁重建全部图表，保留缩放状态（分区归属不变）。 */
   rebuildAll() {
     const zooms = {};
     for (const [group, ch] of Object.entries(this.charts)) {
@@ -219,10 +304,10 @@ export class ChartManager {
       ch.dispose();
       delete this.charts[group];
     }
-    // 连同旧卡片 DOM 一起移除，避免重复建卡
-    document.querySelectorAll('#charts .card').forEach((el) => el.remove());
+    // 连同旧卡片 / 分区 DOM 一起移除，避免重复建卡
+    document.querySelectorAll('#charts .card, #charts .cat').forEach((el) => el.remove());
     for (const group of Object.keys(this.data)) {
-      this.ensureChart(group);
+      this.ensureChart(group, this.sections[group] ?? this.#sectionOfCard(group));
       this.#syncSeries(group);
       if (zooms[group]) this.charts[group].dispatchAction({ type: 'dataZoom', start: zooms[group].start, end: zooms[group].end });
     }

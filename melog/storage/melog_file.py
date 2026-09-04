@@ -327,7 +327,11 @@ class MelogFile:
             for _off, btype, flags, payload in blocks[cut_at:]:
                 if btype == MelogFile.TYPE_MEDIA:
                     rec = _decode_media(btype, flags, payload)
-                    if rec is not None and rec.get("step", cut_step) < cut_step:
+                    if rec is None:
+                        continue
+                    step = rec.get("step")
+                    # 无 step 的记录（如大类别声明）不参与按步截断，一律保留
+                    if step is None or step < cut_step:
                         keep_media.append(_block_bytes(btype, flags, payload))
                 elif btype == MelogFile.TYPE_NAME:
                     nid, pos = _get_varint(payload, 0)

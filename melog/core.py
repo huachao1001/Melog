@@ -107,6 +107,7 @@ class Melog:
         self._closed = False
         self._lock = threading.Lock()
         self._colors: Dict[str, str] = {}  # 用户指定的指标颜色（名称 -> CSS 颜色）
+        self._categories: set = set()  # 本 run 用过的大类别（train/val/test）
 
         self._run_dir = self._prepare_run_dir(output_dir)
         self._session_seq = self._next_session_number()
@@ -129,6 +130,8 @@ class Melog:
                 log_file=str(self._log_file),
             )
             self._web.start()
+            if self._categories:  # 历史日志恢复的大类别分区
+                self._web.set_categories(self._categories)
             if self._colors:  # 历史日志自带配色时一并恢复
                 self._web.set_colors(dict(self._colors))
 
@@ -213,7 +216,12 @@ class Melog:
                 self.store.add(step, values, epoch, persist=False)  # 已落盘，仅回灌展示
                 self._axis.absorb(step, epoch)
             for rec in reader.media():
-                kind, name, step = rec.get("type"), rec.get("metric"), rec.get("step")
+                kind = rec.get("type")
+                if kind == "category":  # 大类别声明记录
+                    if isinstance(rec.get("name"), str):
+                        self._categories.add(rec["name"])
+                    continue
+                name, step = rec.get("metric"), rec.get("step")
                 if isinstance(kind, str) and isinstance(name, str) and isinstance(step, int):
                     self.media.add(kind, name, step, rec.get("file", ""),
                                    rec.get("epoch") if isinstance(rec.get("epoch"), int) else None,
@@ -276,6 +284,8 @@ class Melog:
             合并后的指标（rank>0 也返回，便于本地打印）。
         """
         if isinstance(metrics, MetricGroup):
+            if metrics._category:
+                self._announce_category(metrics._category)
             metrics = metrics._compute()
         merged = reduce_metrics(metrics, op=self.reduce_op)
 
@@ -486,6 +496,23 @@ class Melog:
         if not all_ranks and not self._is_primary:
             return
         self._console.warn(*values, sep=sep, end=end, flush=flush)
+
+    # ------------------------------------------------------------------ 大类别
+    def _announce_category(self, category: str) -> None:
+        """登记一个大类别（首次使用时持久化并推送面板；幂等）。
+
+        category 与指标名的对应不靠命名识别：类别名本身作为声明记录
+        随日志持久化（JSON 记录，复用媒体 block），历史日志重新加载
+        时据此恢复分区。
+        """
+        if not category or category in self._categories:
+            return
+        self._categories.add(category)
+        if not self._is_primary:
+            return
+        self._journal.append({"type": "category", "name": category})
+        if self._web is not None:
+            self._web.publish_categories([category])
 
     def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
         if self._web is not None:

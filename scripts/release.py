@@ -50,11 +50,12 @@ def commits_since_last_bump() -> list[str]:
 
 
 def bump_level(commits: list[str]) -> str:
+    # (?im) 多行锚定：git log %B 的条目体可能带前导换行
     for c in commits:
         if re.search(r"(?im)^(BREAKING CHANGE|\w+(\([^)]*\))?!)[:：]", c):
             return "major"
     for c in commits:
-        if re.match(r"^feat(\([^)]*\))?[:：]", c):
+        if re.search(r"(?im)^feat(\([^)]*\))?[:：]", c):
             return "minor"
     return "patch"
 

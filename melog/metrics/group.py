@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import math
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 from ..utils.distributed import gather_object
@@ -10,6 +11,22 @@ from .base import Metric, _param_specs
 from .basic import Mean
 
 __all__ = ["MetricGroup"]
+
+try:  # torch 可选（与 utils.distributed 同策略）：0 维 tensor 结果也接受
+    import torch as _torch
+except ImportError:  # pragma: no cover
+    _torch = None
+
+
+def _is_finite_number(value: Any) -> bool:
+    """scalar 可记录的标量：int/float（非 bool、有限）或 0 维有限 tensor。"""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return math.isfinite(value)
+    if _torch is not None and _torch.is_tensor(value):
+        return value.ndim == 0 and bool(_torch.isfinite(value))
+    return False
 
 
 class MetricGroup:
@@ -126,13 +143,24 @@ class MetricGroup:
 
         所有 rank 必须以相同顺序调用（一次 all_gather 完成全部同步），
         返回值在各 rank 上一致，可直接交给 melog.scalar()。
+
+        结果规整（scalar 只收数值）：
+        - compute 返回 dict 的指标（prepare 型多输出，如 precision/recall/f1）
+          展平为 ``{name}/{k}``；
+        - NaN / inf 与非数值结果（如 ConfusionMatrix 的矩阵）跳过不进记录。
         """
         names = list(self._metrics)
         states = gather_object([self._metrics[name].state() for name in names])
-        return {
-            name: self._metrics[name].merge_states([state[i] for state in states])
-            for i, name in enumerate(names)
-        }
+        out: Dict[str, Any] = {}
+        for i, name in enumerate(names):
+            v = self._metrics[name].merge_states([state[i] for state in states])
+            if isinstance(v, dict):
+                for k, kv in v.items():
+                    if _is_finite_number(kv):
+                        out[f"{name}/{k}"] = kv
+            elif _is_finite_number(v):
+                out[name] = v
+        return out
 
     def reset(self) -> None:
         """重置组内全部指标，开启新一轮统计。"""

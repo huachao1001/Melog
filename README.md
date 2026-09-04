@@ -12,7 +12,7 @@ epoch 3 loss=0.2153 acc=0.8974 lr=8.2e-04 ━━━━━━━━━━━─�
 
 - **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），`[n/total]` 领先、指标紧随其后实时刷新；进度条与 print 同步镜像到每次会话独立的 `console-<时间戳>.log`（run 目录已有会话产物时新文件自动加序号前缀 `2.`、`3.`……，metrics 日志同理；进度条行就地实时刷新、带时间戳前缀，与终端内容一致，编辑器打开可看到动的进度条）
 - **多 GPU 指标合并**：基于 `torch.distributed` all_reduce 跨进程聚合（默认取均值），仅 rank0 记录与展示；未装 torch 自动退化单进程
-- **Web 可视化**：FastAPI + WebSocket + ECharts，后台线程运行，实时推送曲线，断线自动重连
+- **Web 可视化**：FastAPI + WebSocket + ECharts，后台线程运行，实时推送曲线，断线自动重连；支持 `category` 大类别分区（train / val / test 垂直分块）与层级命名多系列卡片（多分类逐类曲线一图对比）
 - **持久化**：指标写入自研二进制容器（符号表 + varint 增量编码，体积约为 JSONL 的 1/4），每次启动一个带时间戳的会话文件，互不覆盖
 - **断点续训**：重跑同一 `log_dir` 自动接续历史曲线；从某个 epoch 重新训练时自动清除上次中断留下的重叠数据，折线不会在 x 轴上回退
 
@@ -187,6 +187,38 @@ for epoch in range(epochs):
                     on_end=lambda m: save_if_best(m["acc"])):
       val_metrics.feed(args=(logits, labels), loss=loss, write=False)
   ```
+
+### category 大类别（train / val / test 分区）
+
+`MetricGroup` 传 `category` 把同一套指标定义按大类别区分——记录名自动加
+前缀（`train/loss`），Web 面板按**显式声明的类别**把卡片分到独立分区、
+垂直排列（不靠命名猜测）；分区内仍按指标名分卡，`recall/class_0` 式逐类
+命名照常合并为一张多系列卡片。类别随日志持久化，历史日志重新加载时分区
+一并恢复：
+
+```python
+def make_metrics(category):
+    return MetricGroup({
+        "loss": Mean(),
+        "lr": Last(),
+        **{f"recall/class_{c}": Recall(num_classes=K, class_index=c) for c in range(K)},
+    }, category=category)
+
+train_metrics = make_metrics("train")   # → train/loss, train/lr, train/recall/class_0...
+val_metrics   = make_metrics("val")     # → val/loss, ...
+
+for epoch in range(EPOCHS):
+    for _ in StepsBar(train_loader, epoch=epoch, metrics=train_metrics):
+        train_metrics.feed(...)
+    for _ in StepsBar(val_loader, metrics=val_metrics):
+        val_metrics.feed(...)
+    melog.scalar(val_metrics)   # 验证 epoch 末落盘一次
+    val_metrics.reset()
+```
+
+- 类别是**显式属性**而非命名约定：不传 `category` 时行为与旧版完全一致
+  （`loss/train`、`recall/class_0` 等原有命名分组不受影响）
+- 完整示例见 `examples/category_demo.py`
 
 ### feed 如何分发观测
 
@@ -370,6 +402,7 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 ### 主要方法
 
 - `scalar(metrics, advance=0)` — 记录一批指标（dict 或 MetricGroup，后者跨 GPU 合并由内部完成）；坐标由 `StepsBar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
+- `MetricGroup(metrics, category=None)` — 具名指标集合（`from melog import MetricGroup`），`feed(...)` 统一分发观测、跨 GPU 合并；`category=...` 传大类别（train / val / test），Web 面板按类别垂直分区（见上文）
 - `image(name, data, caption=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，自动附着最近一次记录位置，Web 端页签展示（见上文）
 - `StepsBar(iterable, epoch=None, metrics=None, on_end=None)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录并重置组内指标（提前 break / 异常不触发）；`on_end=...` 在合并记录后收到合并后的指标字典（见上文）
 - 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break / 抛异常时 bar 自动出栈（如需立即定稿可 `close()` 或用 with），否则等引用释放时兜底

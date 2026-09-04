@@ -127,7 +127,7 @@ def test_tqdm_iterable_mode():
     items = list(tqdm(range(3), desc="处理", file=out, mininterval=0))
     assert items == [0, 1, 2]
     text = out.getvalue()
-    assert text.startswith("处理 ")  # 进度条行不带时间戳（时间戳只用于消息行）
+    assert text.startswith("\n处理 ")  # 首帧前先换行（bar 从新行开始），行不带时间戳（时间戳只用于消息行）
     assert "3/3" in text and "100.0%" in text
     assert text.endswith("\n")  # close 定稿换行
     assert "━" in text

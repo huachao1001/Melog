@@ -162,6 +162,9 @@ class tqdm:
                 stream.write("\x1b[?25l")
                 stream.flush()
                 self._cursor_hidden = True
+            # 先换行再渲染首帧：bar 从新行开始，不与既有输出同行
+            stream.write("\n")
+            stream.flush()
             self.render()
 
     # ------------------------------------------------------------ tqdm 兼容

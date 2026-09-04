@@ -283,10 +283,11 @@ class Melog:
         Returns:
             合并后的指标（rank>0 也返回，便于本地打印）。
         """
-        if isinstance(metrics, MetricGroup):
-            if metrics._category:
-                self._announce_category(metrics._category)
-            metrics = metrics._compute()
+        group = metrics if isinstance(metrics, MetricGroup) else None
+        if group is not None:
+            if group._category:
+                self._announce_category(group._category)
+            metrics = group._compute()
         merged = reduce_metrics(metrics, op=self.reduce_op)
 
         if not self._is_primary:
@@ -296,7 +297,15 @@ class Melog:
             x, out_epoch = self._axis.resolve_commit()
             self._journal.add(x, merged, out_epoch)
             self._push_web(x, merged, out_epoch)
-            self._bars.update_top(merged)
+            # 进度条 postfix 显示用户注册名（category 前缀只用于落盘/面板分区）
+            bar_values = merged
+            if group is not None and group._category:
+                cat = group._category
+                bar_values = {
+                    (k[len(cat) + 1:] if k.startswith(f"{cat}/") else k): v
+                    for k, v in merged.items()
+                }
+            self._bars.update_top(bar_values)
             if advance:
                 self._bars.advance_top(advance)
             self._axis.commit(x, out_epoch)

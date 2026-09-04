@@ -405,7 +405,7 @@ def test_group_category_prefixes_record_names(tmp_path):
         (0, None, {"train/loss": 1.0, "train/recall/class_0": 0.5}),
         (1, None, {"val/loss": 2.0}),
     ]
-    assert set(train.local()) == {"train/loss", "train/recall/class_0"}
+    assert set(train.local()) == {"loss", "recall/class_0"}  # 实时显示用注册名，不带前缀
     # 类别声明随日志持久化
     cats = [r for r in MelogFileReader(path).media() if r.get("type") == "category"]
     assert {r["name"] for r in cats} == {"train", "val"}

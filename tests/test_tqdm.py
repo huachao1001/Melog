@@ -250,7 +250,7 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
     log_path = next((tmp_path / "t").glob("**/*console-*.log"))
     text = read(log_path)
     assert "3/3" in text               # 迭代自动推进到终点
-    assert "epoch 0" in text           # epoch 传入时行首自动标注
+    assert "epoch=0" in text           # epoch 传入时行首自动标注
 
 
 def test_melog_progress_shows_log_postfix(tmp_path):

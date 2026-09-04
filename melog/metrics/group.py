@@ -144,14 +144,10 @@ class MetricGroup:
         """当前 rank 的本地指标值（零通信，不触发跨 rank 收集），供实时显示。
 
         等价于把本 rank 状态单方面合并：无观测的指标为 NaN；返回矩阵的
-        指标（如 ConfusionMatrix）原样返回，调用方可按需过滤。设置了
-        category 时键带 ``category/`` 前缀（与 _compute 记录名一致）。
+        指标（如 ConfusionMatrix）原样返回，调用方可按需过滤。键为用户
+        注册名，**不带 category 前缀**（前缀只用于落盘记录，见 _compute）。
         """
-        return {
-            (f"{self._category}/{name}" if self._category else name):
-                m.merge_states([m.state()])
-            for name, m in self._metrics.items()
-        }
+        return {name: m.merge_states([m.state()]) for name, m in self._metrics.items()}
 
     def _compute(self) -> Dict[str, Any]:
         """同步合并组内全部指标并返回全局结果（内部方法，由 scalar 调用）。

@@ -85,7 +85,7 @@ for epoch in range(epochs):
 - `step` 为**当前 epoch 内**的记录序号，内部自增（每个 epoch 从 0 重新计步）；
   完全没用 `StepsBar(epoch=...)` 时退化为全局自增 x、不标注 epoch 分界
 - 要控制记录粒度（每步 / 每 N 步窗口），调整调用 `scalar()` 的频率即可，无需手动指定坐标
-- Web 曲线在每个 epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示 `epoch N · step X`
+- Web 曲线在每个 epoch 起点画分界虚线（标注 `e0` / `e1` / …），悬浮提示显示 `epoch=N · step X`
 - `MetricGroup` 末尾收尾交给 `StepsBar` 的自动记录（见下文），epoch 沿用绑定值
 
 ## 控制台消息

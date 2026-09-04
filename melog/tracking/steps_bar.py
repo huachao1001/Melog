@@ -74,7 +74,7 @@ class StepsBar(tqdm):
 
     传入 epoch 时，进入进度条即绑定该 epoch（epoch 内步数清零、全局
     x 从上一位置接续），bar 结束后沿用，直至下一个 epoch；行首描述
-    自动标为 "epoch N"（需自定义时透传 tqdm 的 desc=...）::
+    自动标为 "epoch=N"（需自定义时透传 tqdm 的 desc=...）::
 
         for epoch in range(epochs):
             for _ in StepsBar(loader, epoch=epoch):
@@ -128,7 +128,7 @@ class StepsBar(tqdm):
             iterable: 可迭代对象（训练/验证循环）。
             total: 总步数；缺省时自动取 len(iterable)。
             epoch: 绑定该 epoch（epoch 内步数清零、全局 x 接续、行首
-                固定标注 "epoch N"，用户 desc 拼在其后）。
+                固定标注 "epoch=N"，用户 desc 拼在其后）。
             metrics: MetricGroup；每次 feed 自动记录本卡本地值（实时
                 曲线 + bar 显示），自动从批次识别样本数供 Mean 精确
                 平均，迭代自然结束自动合并记录全局值并重置组内指标。
@@ -175,10 +175,10 @@ class StepsBar(tqdm):
             # 嵌套时本条将覆盖栈顶：先擦掉栈顶在屏幕上的行，首帧在干净行上渲染
             host._bars.cover_top()
         if epoch is not None:
-            # 行首固定标注 "epoch N"；用户传了 desc 时拼在 epoch 之后，
-            # 无需自己写 desc=f"epoch {epoch}"
+            # 行首固定标注 "epoch=N"；用户传了 desc 时拼在 epoch 之后，
+            # 无需自己写 desc=f"epoch={epoch}"
             desc = kwargs.pop("desc", None)
-            kwargs["desc"] = f"epoch {epoch} {desc}" if desc else f"epoch {epoch}"
+            kwargs["desc"] = f"epoch={epoch} {desc}" if desc else f"epoch={epoch}"
         super().__init__(iterable=iterable, total=total, disable=disable, **kwargs)
         if metrics is not None:
             self._hook_metrics(metrics, host)
@@ -189,9 +189,10 @@ class StepsBar(tqdm):
         """挂载实时钩子：feed() 后把本卡本地值刷进 postfix 并写日志/面板。
 
         NaN 与非数值（如混淆矩阵）跳过；即使本条被上层 bar 覆盖，
-        postfix 数据照常更新，恢复渲染时可见。记录走 _record_local：
-        零通信、仅 rank0 落盘（跨 GPU 合并留给 epoch 末自动记录）；
-        feed(write=False) 时只刷 postfix、不写日志。
+        postfix 数据照常更新，恢复渲染时可见。postfix 显示**用户注册名**
+        （不带 category 前缀）；记录走 _record_local：零通信、仅 rank0
+        落盘，落盘名带 category 前缀（与 epoch 末合并记录一致，面板据此
+        分区）；feed(write=False) 时只刷 postfix、不写日志。
         """
 
         def _on_feed(write: bool = True) -> None:
@@ -204,6 +205,9 @@ class StepsBar(tqdm):
                 return
             self.set_postfix(snap)
             if write:
+                cat = metrics._category
+                if cat:
+                    snap = {f"{cat}/{k}": v for k, v in snap.items()}
                 host._record_local(snap)
 
         metrics._on_feed = _on_feed

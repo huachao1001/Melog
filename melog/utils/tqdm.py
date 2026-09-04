@@ -151,6 +151,7 @@ class tqdm:
         self._t0 = time.monotonic()
         self._last_render = 0.0
         self._rendered_len = 0
+        self._last_plain: Optional[str] = None  # 上次渲染的纯文本（内容去重用）
         self._closed = False
         self._cursor_hidden = False
         if not disable:
@@ -197,19 +198,40 @@ class tqdm:
         fp.write(f"{s}\n")
         fp.flush()
 
-    def refresh(self) -> None:
-        """立即重绘（绕过 mininterval）。"""
+    def refresh(self, force: bool = False) -> None:
+        """立即重绘（绕过 mininterval）。
+
+        force=True 时内容未变也重绘：消息擦除、子条覆盖后恢复等场景
+        需要修复性重绘；缺省只在实际内容变化时输出。
+        """
         if not self.disable and not self._closed and not self.covered:
-            self.render()
+            self.render(force=force)
+
+    def clear_line(self) -> None:
+        """清除本条进度条当前占用的终端行（消息打印 / 嵌套覆盖前调用）。
+
+        渲染总以 ``\\r`` 结尾（光标停在行首），``\\x1b[2K`` 擦除整行即可；
+        仅 TTY 生效（重定向时无操作，文件侧由 Mirror 协议处理）。
+        """
+        if self.disable or self._closed:
+            return
+        stream = self._stream()
+        if _is_tty(stream):
+            stream.write("\x1b[2K")
+            stream.flush()
 
     def close(self) -> None:
-        """以最新状态定稿：重绘一行后换行（leave=False 则清除该行）。"""
+        """以最新状态定稿：重绘一行后换行（leave=False 则清除该行）。
+
+        定稿为强制重绘：屏幕行可能刚被子条覆盖/清除，文件侧也保证
+        最终状态成行（内容未变时由 Mirror 相邻去重，不重复落盘）。
+        """
         if self._closed:
             return
         self._closed = True
         if not self.disable:
             stream = self._stream()
-            self.render()
+            self.render(force=True)
             if self.leave:
                 stream.write("\n")
             else:
@@ -259,19 +281,24 @@ class tqdm:
             return self.colour
         return _is_tty(stream)
 
-    def render(self) -> None:
+    def render(self, force: bool = False) -> None:
         """把当前状态渲染为一行并以 \\r 结尾输出（终端原地重绘）。
 
         终端下带 Melog 主题色；pad 计算按可见宽度（ANSI 码零显示宽度）。
+        内容与上次渲染相同且非强制时跳过：屏幕已是最新，日志文件侧也不
+        重复落盘；force 用于屏幕行被消息擦除、子条覆盖后的修复性重绘。
         """
         stream = self._stream()
         line, plain = self._format(self._use_color(stream))
+        if not force and plain == self._last_plain:
+            return
         # 行变短时用空格覆盖残留（文件侧由 Mirror 截断重写并剥离颜色码）
         pad = " " * max(0, self._rendered_len - len(plain))
         stream.write(line + pad + "\r")
         stream.flush()
         self._rendered_len = len(plain) + len(pad)
         self._last_render = time.monotonic()
+        self._last_plain = plain
 
     def _format(self, use_color: bool) -> Tuple[str, str]:
         """渲染当前状态，返回 (终端行[含颜色码], 纯文本行)。

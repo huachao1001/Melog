@@ -21,7 +21,7 @@ def lg(tmp_path):
 
 
 def read_log(tmp_path) -> str:
-    return (tmp_path / "test").glob("**/console.log").__next__().read_text(encoding="utf-8")
+    return (tmp_path / "test").glob("**/console-*.log").__next__().read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- 控制台消息

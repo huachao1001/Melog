@@ -157,6 +157,9 @@ class StepsBar(tqdm):
                 iterable, lambda: host._log_group(metrics, reset=True), on_item=_on_item
             )
         disable = (not host._is_primary) or (not host._enable_progress) or _progress_disabled()
+        if not disable:
+            # 嵌套时本条将覆盖栈顶：先擦掉栈顶在屏幕上的行，首帧在干净行上渲染
+            host._bars.cover_top()
         if epoch is not None and "desc" not in kwargs:
             kwargs["desc"] = f"epoch {epoch}"
         super().__init__(iterable=iterable, total=total, disable=disable, **kwargs)

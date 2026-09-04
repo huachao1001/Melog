@@ -52,7 +52,7 @@ class Melog:
     - Console   控制台消息 + 官方 print 拦截
     - Journal   metrics-<时间戳>.melog 二进制日志落盘
     - MediaLog  图像 / 音频记录流程
-    - Mirror    console.log 镜像 + stdio 接管
+    - Mirror    console-<时间戳>.log 镜像（进度条就地刷新）+ stdio 接管
     - WebServer 实时面板
 
     用法：
@@ -71,6 +71,7 @@ class Melog:
         web_host: str = "127.0.0.1",
         web_port: Optional[int] = None,
         enable_progress: bool = True,
+        console_throttle: float = 0.0,
         reduce_op: str = "mean",
         flush_every: int = 1,
         max_plot_points: int = 2000,
@@ -82,6 +83,8 @@ class Melog:
             enable_web: 是否启动 Web 可视化服务（仅 rank0 生效）。
             web_host: Web 服务监听地址；web_port 为 None 时自动选空闲端口。
             enable_progress: 是否启用控制台进度条（仅 rank0 生效）。
+            console_throttle: 控制台日志中进度条行的就地刷新最小间隔
+                （秒），默认 0 实时；调大（如 2.0）可减少写盘次数。
             reduce_op: 多 GPU 合并方式，"mean" 或 "sum"。
             flush_every: 每 N 次 log 落盘一次（二进制日志按批成块）。
             max_plot_points: Web 历史曲线单指标最大点数，超出自动降采样；
@@ -90,6 +93,7 @@ class Melog:
         self.project = project
         self.reduce_op = reduce_op
         self._enable_progress = enable_progress
+        self._console_throttle = console_throttle
         self._rank = get_rank()
         self._is_primary = self._rank == 0
         self._axis = Axis()  # 全局 x / epoch 计数与定位的唯一所有者
@@ -121,16 +125,20 @@ class Melog:
                 self._web.set_colors(dict(self._colors))
 
         self._bars = BarStack()  # 打开中的进度条栈（栈顶 = 当前环境）
-        self._console = Console()  # 控制台消息 + print 拦截
-        # 控制台日志镜像（仅 rank0）：进度条与 print 同步写入 console.log
+        self._console = Console(top_bar=self._bars.top)  # 控制台消息 + print 拦截
+        # 控制台日志镜像（仅 rank0）：进度条与 print 同步写入本次会话的
+        # console-<启动时间戳>.log（每次运行一个新文件，不跨会话追加）
         self.mirror: Optional[Mirror] = None
+        self._console_log_path: Optional[Path] = None
         if self._is_primary:
-            self.mirror = Mirror(self._run_dir / "console.log")
+            self._console_log_path = self._next_console_log()
+            self.mirror = Mirror(self._console_log_path,
+                                 throttle=self._console_throttle)
             self.mirror.hook_stdio()
             # 拦截官方 print：用户代码里的 print(...) 内部改走 console.log()
             self._console.patch_print()
         if self._web is not None:
-            # 端口可能随机分配，启动时打印面板地址（同步进 console.log）
+            # 端口可能随机分配，启动时打印面板地址（同步进控制台日志）
             self.log(f"Web 可视化: {self._web.url}")
         # 注册为全局活动实例（见 melog.current / 模块级 melog.log 等便捷接口）
         _set_active(self)
@@ -156,6 +164,16 @@ class Melog:
         i = 1
         while path.exists():  # 同秒内多次初始化（如测试）时顺延
             path = self._run_dir / f"metrics-{ts}-{i}.melog"
+            i += 1
+        return path
+
+    def _next_console_log(self) -> Path:
+        """本次会话的控制台日志：console-<启动时间戳>.log，同秒顺延。"""
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path = self._run_dir / f"console-{ts}.log"
+        i = 1
+        while path.exists():
+            path = self._run_dir / f"console-{ts}-{i}.log"
             i += 1
         return path
 
@@ -195,6 +213,11 @@ class Melog:
     def web_url(self) -> Optional[str]:
         """Web 面板地址（未启用 Web 时为 None）。"""
         return self._web.url if self._web is not None else None
+
+    @property
+    def console_log(self) -> Optional[Path]:
+        """本次会话的控制台日志文件路径（未启用时为 None；close 后仍可用）。"""
+        return self._console_log_path
 
     # ------------------------------------------------------------------ 进度条栈
     def current_bar(self) -> Optional[tqdm]:

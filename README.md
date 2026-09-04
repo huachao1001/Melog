@@ -10,7 +10,7 @@ epoch 3 loss=0.2153 acc=0.8974 lr=8.2e-04 ━━━━━━━━━━━─�
 
 ## 特性
 
-- **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），`[n/total]` 领先、指标紧随其后实时刷新；进度条与 print 同步镜像到 console.log（进度条每 2 秒追加一行快照，`tail -f console.log` 可见滚动刷新）
+- **控制台实时进度条**：自研 tqdm（用法与 tqdm.tqdm 一致），`[n/total]` 领先、指标紧随其后实时刷新；进度条与 print 同步镜像到每次会话独立的 `console-<时间戳>.log`（进度条行就地实时刷新、带时间戳前缀，与终端内容一致，编辑器打开可看到动的进度条）
 - **多 GPU 指标合并**：基于 `torch.distributed` all_reduce 跨进程聚合（默认取均值），仅 rank0 记录与展示；未装 torch 自动退化单进程
 - **Web 可视化**：FastAPI + WebSocket + ECharts，后台线程运行，实时推送曲线，断线自动重连
 - **持久化**：指标写入自研二进制容器（符号表 + varint 增量编码，体积约为 JSONL 的 1/4），每次启动一个带时间戳的会话文件，互不覆盖

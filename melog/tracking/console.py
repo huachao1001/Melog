@@ -10,7 +10,7 @@ from __future__ import annotations
 import builtins
 import sys
 import time
-from typing import Any
+from typing import Any, Callable, Optional
 
 from ..utils.tqdm import _is_tty
 
@@ -27,6 +27,15 @@ _PRINT_PATCHED: list = []
 
 class Console:
     """控制台消息统一出口：多参数转 str、图标前缀、TTY 着色、print 拦截。"""
+
+    def __init__(self, top_bar: Optional[Callable[[], Optional[Any]]] = None) -> None:
+        """
+        Args:
+            top_bar: 返回当前栈顶进度条（无则 None）的回调。提供后，消息
+                打印前先擦除屏幕上的进度条行、打印后在下一行重绘，避免
+                消息覆写进度条行首留下残迹（仅 TTY 生效）。
+        """
+        self._top_bar = top_bar
 
     def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
         """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
@@ -46,9 +55,18 @@ class Console:
 
     def _emit(self, icon: str, color: str, values: tuple, sep: str,
               end: str, flush: bool) -> None:
-        """控制台消息统一出口：时间戳、转 str、拼图标、按 TTY 着色，写入当前 stdout。"""
-        text = sep.join(str(v) for v in values)
+        """控制台消息统一出口：时间戳、转 str、拼图标、按 TTY 着色，写入当前 stdout。
+
+        有打开中的进度条时（完整行消息）：先擦除进度条行再写消息，
+        消息独占一行；之后不主动重绘进度条，由下一次渲染在消息下方
+        重新开始一条新的进度条行（终端与日志文件行为一致）。
+        """
         stream = sys.stdout
+        text = sep.join(str(v) for v in values)
+        bar = self._top_bar() if self._top_bar is not None else None
+        redraw = bar is not None and end.endswith("\n") and _is_tty(stream)
+        if redraw:
+            bar.clear_line()  # 光标已在行首（进度条渲染以 \r 结尾），擦除整行
         if not text:  # 空内容不加时间戳（print() / print(end="") 的空行语义）
             stream.write(end)
             if flush:

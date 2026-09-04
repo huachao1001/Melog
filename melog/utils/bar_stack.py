@@ -39,6 +39,16 @@ class BarStack:
         self._frames: List[BarFrame] = []
         self._lock = threading.Lock()
 
+    def cover_top(self) -> None:
+        """擦除当前栈顶在终端上占用的行（嵌套子条首帧渲染前调用）。
+
+        子条即将覆盖栈顶：先擦掉栈顶整行，避免子条首帧只覆盖行首部分、
+        栈顶尾部以残迹形式留在屏幕上。仅 TTY 生效。
+        """
+        with self._lock:
+            if self._frames:
+                self._frames[-1].bar.clear_line()
+
     def push(self, bar: tqdm, metrics: Optional[MetricGroup] = None) -> None:
         """压栈登记一条进度条（实时刷新钩子由 StepsBar 自行挂载）。"""
         with self._lock:
@@ -58,7 +68,8 @@ class BarStack:
             if self._frames:
                 top = self._frames[-1].bar
                 top.covered = False
-                top.refresh()
+                # 强制恢复：子条的覆盖/清除会抹掉栈顶在屏幕与文件中的行
+                top.refresh(force=True)
 
     def top(self) -> Optional[tqdm]:
         """当前栈顶进度条（无打开的 bar 时为 None）。"""

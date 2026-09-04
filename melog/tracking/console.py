@@ -1,13 +1,14 @@
 """控制台消息：print 风格接口（log / success / error / warn）+ 官方 print 拦截。
 
 由 Melog 组合使用；消息渲染到当前 stdout，console.log 镜像由 Mirror
-（接管 stdout）完成，本模块不关心落盘。每条消息自动带 ``[HH:MM:SS]``
-时间戳前缀（空内容不加，保持空行语义）。
+（接管 stdout）完成，本模块不关心落盘。每条消息自动带
+``[MM-DD HH:MM:SS][调用方文件名]`` 前缀（空内容不加，保持空行语义）。
 """
 
 from __future__ import annotations
 
 import builtins
+import os
 import sys
 import time
 from typing import Any, Callable, Optional
@@ -16,6 +17,9 @@ from ..utils.tqdm import _is_tty
 
 __all__ = ["Console"]
 
+# 库根目录（melog/）：调用方帧定位时跳过库内部帧
+_PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # 控制台消息色（SGR 标准色，随终端主题）；log 走终端默认色（黑字）
 _GREEN, _RED, _YELLOW = "\x1b[32m", "\x1b[31m", "\x1b[33m"
 _RESET = "\x1b[0m"
@@ -23,6 +27,21 @@ _RESET = "\x1b[0m"
 # 被 print 拦截顶掉的原生 print，以及当前已拦截 print 的实例栈（close 时还原）
 _ORIG_PRINT = None
 _PRINT_PATCHED: list = []
+
+
+def _source_name() -> str:
+    """消息调用方所在源文件名（去掉 .py 后缀）。
+
+    从调用栈向上跳过库内部帧（melog/ 包内），取第一个用户侧帧；
+    整条链都来自库内部（如初始化提示）时回退 "melog"。
+    """
+    frame = sys._getframe(1)
+    while frame is not None:
+        file = frame.f_globals.get("__file__")
+        if file and not os.path.abspath(file).startswith(_PKG_ROOT + os.sep):
+            return os.path.splitext(os.path.basename(file))[0]
+        frame = frame.f_back
+    return "melog"
 
 
 class Console:
@@ -38,19 +57,19 @@ class Console:
         self._top_bar = top_bar
 
     def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._emit("", "", values, sep, end, flush)
 
     def success(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """绿色文字 + ✔ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """绿色文字 + ✔ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._emit("✔", _GREEN, values, sep, end, flush)
 
     def error(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """红色文字 + ✘ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """红色文字 + ✘ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._emit("✘", _RED, values, sep, end, flush)
 
     def warn(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """黄色文字 + ⚠ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """黄色文字 + ⚠ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._emit("⚠", _YELLOW, values, sep, end, flush)
 
     def _emit(self, icon: str, color: str, values: tuple, sep: str,
@@ -72,8 +91,8 @@ class Console:
             if flush:
                 stream.flush()
             return
-        line = f"{time.strftime('[%H:%M:%S]')} {icon} {text}" if icon \
-            else f"{time.strftime('[%H:%M:%S]')} {text}"
+        prefix = f"{time.strftime('[%m-%d %H:%M:%S]')}[{_source_name()}]"
+        line = f"{prefix} {icon} {text}" if icon else f"{prefix} {text}"
         if color and _is_tty(stream):
             line = f"{color}{line}{_RESET}"
         stream.write(line + end)

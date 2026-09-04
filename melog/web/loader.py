@@ -1,7 +1,7 @@
 """日志文件解析：metrics-*.melog 二进制会话文件 → 指标时间序列 / 媒体索引。
 
-同一 run 目录下的多个会话文件（每次启动一个，带时间戳）在加载时按
-文件名顺序合并成完整时间线。
+同一 run 目录下的多个会话文件（每次启动一个，带时间戳；已有会话时
+文件名加序号前缀 2.、3.……）在加载时按文件名顺序合并成完整时间线。
 """
 
 from __future__ import annotations
@@ -15,16 +15,17 @@ from ..storage.melog_file import MelogFileReader
 Point = Tuple[int, float, Optional[int]]
 _PATHS = Union[str, Path, Iterable[Union[str, Path]]]
 
-# 会话文件名：metrics-<YYYYmmdd_HHMMSS>[-<同秒序号>].melog
-_SESSION_RE = re.compile(r"^metrics-(\d{8}_\d{6})(?:-(\d+))?\.melog$")
+# 会话文件名：[<序号>.]metrics-<YYYYmmdd_HHMMSS>[-<同秒序号>].melog
+# （首个会话无序号前缀，后续会话带 2.、3.…… 前缀）
+_SESSION_RE = re.compile(r"^(?:(\d+)\.)?metrics-(\d{8}_\d{6})(?:-(\d+))?\.melog$")
 
 
-def _session_sort_key(path: Path) -> Tuple[str, int]:
-    """按启动时间排序（同秒序号次之）；不符合命名的文件排最前。"""
+def _session_sort_key(path: Path) -> Tuple[str, int, int]:
+    """按启动时间排序（会话序号、同秒序号依次次之）；不符合命名的文件排最前。"""
     m = _SESSION_RE.match(path.name)
     if m:
-        return (m.group(1), int(m.group(2) or 0))
-    return ("", 0)
+        return (m.group(2), int(m.group(1) or 1), int(m.group(3) or 0))
+    return ("", 0, 0)
 
 
 class LogLoader:
@@ -34,21 +35,23 @@ class LogLoader:
     def session_files(target: Union[str, Path]) -> List[Path]:
         """把文件 / 目录参数展开为要合并的会话文件列表（按时间戳序）。
 
-        - 目录：取其中 metrics*.melog（无则回退 *.melog；再无则递归
-          扫描并选中最近写入的那个 run 目录，兼容旧版时间戳子目录布局）
+        - 目录：取其中 metrics 会话文件（含序号前缀命名，无则回退
+          *.melog；再无则递归扫描并选中最近写入的那个 run 目录，兼容
+          旧版时间戳子目录布局）
         - metrics* 文件：合并其所在目录的全部会话文件（一次训练的完整曲线）
         - 其他文件：单独解析
         """
         p = Path(target)
         if p.is_dir():
-            files = sorted(p.glob("metrics*.melog"), key=_session_sort_key) \
+            files = sorted(p.glob("*metrics-*.melog"), key=_session_sort_key) \
                 or sorted(p.glob("*.melog"))
             if files:
                 return files
             nested = sorted(p.rglob("*.melog"), key=lambda f: f.stat().st_mtime)
             return sorted(nested[-1].parent.glob("*.melog")) if nested else []
-        if p.name.startswith("metrics") and p.parent.is_dir():
-            files = sorted(p.parent.glob("metrics*.melog"), key=_session_sort_key)
+        if (_SESSION_RE.match(p.name) or p.name.startswith("metrics")) \
+                and p.parent.is_dir():
+            files = sorted(p.parent.glob("*metrics-*.melog"), key=_session_sort_key)
             return files or [p]
         return [p]
 

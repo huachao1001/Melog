@@ -8,7 +8,7 @@
 
 终端里进度条原地实时刷新；日志文件里进度条行同样就地刷新（始终一行
 在动，与终端内容一致，进度条字符替换为加高的块状样式更醒目，行首不
-带时间戳）。消息插入时进度条行定稿、消息独占一行（带 [HH:MM:SS]
+带时间戳）。消息插入时进度条行定稿、消息独占一行（带 [MM-DD HH:MM:SS][文件名]
 时间戳），进度条在消息下方重新开始。每次运行生成独立文件
 console-<启动时间戳>.log，不跨会话追加。注意：就地刷新对 tail -f
 不可见（无新增字节），查看进度条请用编辑器实时刷新。
@@ -37,7 +37,7 @@ def main():
     t0 = time.monotonic()
     for epoch in range(EPOCHS):
         melog.log(f"epoch {epoch} 开始")
-        for step in StepsBar(range(STEPS), epoch=epoch, desc=f"epoch {epoch}"):
+        for step in StepsBar(range(STEPS), epoch=epoch):
             g = epoch * STEPS + step
             loss = 2.0 * math.exp(-g / 120) + 0.05 + 0.02 * math.sin(g / 7)
             acc = 1 - loss / 2.1

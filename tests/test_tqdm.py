@@ -247,7 +247,7 @@ def test_melog_progress_iterates_and_autoupdates(tmp_path):
         lg.close()
     assert sys.stdout is saved_stdout
 
-    log_path = next((tmp_path / "t").glob("**/console-*.log"))
+    log_path = next((tmp_path / "t").glob("**/*console-*.log"))
     text = read(log_path)
     assert "3/3" in text               # 迭代自动推进到终点
     assert "epoch 0" in text           # epoch 传入时行首自动标注
@@ -262,7 +262,7 @@ def test_melog_progress_shows_log_postfix(tmp_path):
             lg.scalar({"loss": 0.5})
     finally:
         lg.close()
-    log_path = next((tmp_path / "t").glob("**/console-*.log"))
+    log_path = next((tmp_path / "t").glob("**/*console-*.log"))
     assert "loss=0.5" in read(log_path)
 
 
@@ -418,7 +418,7 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
         lg.close()
     assert sys.stdout is saved_stdout  # 已还原
 
-    log_path = next((tmp_path / "t").glob("**/console-*.log"))
+    log_path = next((tmp_path / "t").glob("**/*console-*.log"))
     assert log_path.name.startswith("console-") and log_path.name.endswith(".log")
     text = read(log_path)
     assert "step done\n" in text
@@ -444,11 +444,14 @@ def test_melog_file_lines_match_terminal(tmp_path, capsys):
     back = str.maketrans({"█": "━", "░": "─"})  # 文件侧加高字符还原为细线比对
     for fl in file_lines:
         assert fl.translate(back) in term_lines, f"文件行未在终端出现: {fl}"
-    # 文件侧进度条为加高块状字符，消息行保留 [HH:MM:SS] 时间戳
+    # 文件侧进度条为加高块状字符，消息行保留 [MM-DD HH:MM:SS][文件名] 前缀
     bar_lines = [ln for ln in file_lines if "█" in ln or "░" in ln]
     assert bar_lines, "文件中应有加高块状进度条"
     msg_lines = [ln for ln in file_lines if "一条消息" in ln]
-    assert msg_lines and all(re.match(r"^\[\d{2}:\d{2}:\d{2}\] ", ln) for ln in msg_lines)
+    assert msg_lines and all(
+        re.match(r"^\[\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\[test_tqdm\] ", ln)
+        for ln in msg_lines
+    )
 
 
 def test_melog_console_log_per_session(tmp_path):

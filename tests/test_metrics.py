@@ -218,7 +218,7 @@ def test_batch_metric_with_melog(tmp_path):
 
     from melog.storage.melog_file import MelogFileReader
 
-    path = next((tmp_path / "t").glob("metrics*.melog"))
+    path = next((tmp_path / "t").glob("*metrics-*.melog"))
     records = list(MelogFileReader(path).records())
     assert records == [(0, None, {"acc": 1.0}), (1, None, {"acc": 1.0})]
 
@@ -335,7 +335,7 @@ def test_group_compute_records_and_resets(tmp_path):
 
     from melog.storage.melog_file import MelogFileReader
 
-    path = next((tmp_path / "t").glob("metrics*.melog"))
+    path = next((tmp_path / "t").glob("*metrics-*.melog"))
     records = list(MelogFileReader(path).records())
     assert records == [
         (0, None, {"loss": 1.0, "acc": 0.5}),

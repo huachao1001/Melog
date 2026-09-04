@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -42,6 +43,12 @@ from .web.store import MetricStore
 
 __all__ = ["Melog", "current"]
 
+# 会话产物命名：目录里没有会话文件时直接 console-<时间戳>.log /
+# metrics-<时间戳>.melog；已有会话文件时加序号前缀 2.、3.……（无前缀
+# 视为第 1 个），便于按序查看。同一次会话的两类文件共用一个序号。
+_SESSION_GLOBS = ("*metrics-*.melog", "*console-*.log")
+_SEQ_PREFIX_RE = re.compile(r"^(\d+)\.")
+
 
 class Melog:
     """训练监控主入口（内部实现；公开入口为 melog.init()）。
@@ -50,7 +57,7 @@ class Melog:
     - Axis      全局 x / epoch 坐标裁决
     - BarStack  进度条栈（嵌套、恢复渲染）
     - Console   控制台消息 + 官方 print 拦截
-    - Journal   metrics-<时间戳>.melog 二进制日志落盘
+    - Journal   metrics-<时间戳>.melog 二进制日志落盘（多会话加序号前缀）
     - MediaLog  图像 / 音频记录流程
     - Mirror    console-<时间戳>.log 镜像（进度条就地刷新）+ stdio 接管
     - WebServer 实时面板
@@ -102,6 +109,7 @@ class Melog:
         self._colors: Dict[str, str] = {}  # 用户指定的指标颜色（名称 -> CSS 颜色）
 
         self._run_dir = self._prepare_run_dir(output_dir)
+        self._session_seq = self._next_session_number()
         self._log_file = self._next_log_file()
 
         self.store = MetricStore()
@@ -127,7 +135,8 @@ class Melog:
         self._bars = BarStack()  # 打开中的进度条栈（栈顶 = 当前环境）
         self._console = Console(top_bar=self._bars.top)  # 控制台消息 + print 拦截
         # 控制台日志镜像（仅 rank0）：进度条与 print 同步写入本次会话的
-        # console-<启动时间戳>.log（每次运行一个新文件，不跨会话追加）
+        # console-<启动时间戳>.log（每次运行一个新文件，不跨会话追加；
+        # 目录里已有会话文件时与 metrics 一样加序号前缀）
         self.mirror: Optional[Mirror] = None
         self._console_log_path: Optional[Path] = None
         if self._is_primary:
@@ -157,24 +166,36 @@ class Melog:
             (run_dir / "rank.txt").write_text(str(self._rank), encoding="utf-8")
         return run_dir
 
+    def _next_session_number(self) -> int:
+        """下一个会话序号：run 目录没有会话文件时为 1（命名不加前缀），
+        否则为已有最大序号 + 1（无前缀的历史文件视为序号 1）。"""
+        seqs = []
+        for pattern in _SESSION_GLOBS:
+            for f in self._run_dir.glob(pattern):
+                m = _SEQ_PREFIX_RE.match(f.name)
+                seqs.append(int(m.group(1)) if m else 1)
+        return max(seqs, default=0) + 1
+
     def _next_log_file(self) -> Path:
-        """本次会话的日志文件：带启动时间戳，多次训练互不覆盖。"""
+        """本次会话的日志文件：metrics-<启动时间戳>.melog，目录里已有
+        会话文件时加序号前缀（2.、3.……），多次训练互不覆盖。"""
         ts = time.strftime("%Y%m%d_%H%M%S")
-        path = self._run_dir / f"metrics-{ts}.melog"
-        i = 1
-        while path.exists():  # 同秒内多次初始化（如测试）时顺延
-            path = self._run_dir / f"metrics-{ts}-{i}.melog"
-            i += 1
+        prefix = "" if self._session_seq == 1 else f"{self._session_seq}."
+        path = self._run_dir / f"{prefix}metrics-{ts}.melog"
+        while path.exists():  # 同秒兜底（序号被并发占用）：顺延
+            self._session_seq += 1
+            path = self._run_dir / f"{self._session_seq}.metrics-{ts}.melog"
         return path
 
     def _next_console_log(self) -> Path:
-        """本次会话的控制台日志：console-<启动时间戳>.log，同秒顺延。"""
+        """本次会话的控制台日志：console-<启动时间戳>.log，与 metrics
+        文件共用会话序号（目录里已有会话文件时加序号前缀）。"""
         ts = time.strftime("%Y%m%d_%H%M%S")
-        path = self._run_dir / f"console-{ts}.log"
-        i = 1
-        while path.exists():
-            path = self._run_dir / f"console-{ts}-{i}.log"
-            i += 1
+        prefix = "" if self._session_seq == 1 else f"{self._session_seq}."
+        path = self._run_dir / f"{prefix}console-{ts}.log"
+        while path.exists():  # 同秒兜底（序号被并发占用）：顺延
+            self._session_seq += 1
+            path = self._run_dir / f"{self._session_seq}.console-{ts}.log"
         return path
 
     def _restore_history(self) -> None:
@@ -184,7 +205,7 @@ class Melog:
         （step / 各 epoch 基准）从日志重建，媒体索引与用户配色一并
         恢复。此后重新进入某个历史 epoch 时按其基准截断重叠区。
         """
-        for f in sorted(self._run_dir.glob("metrics*.melog")):
+        for f in LogLoader.session_files(self._run_dir):
             if f == self._log_file:
                 continue  # 跳过本次会话自己的（空）文件
             reader = MelogFileReader(f)
@@ -422,7 +443,7 @@ class Melog:
 
     # ------------------------------------------------------------------ 控制台消息
     def log(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [HH:MM:SS] 时间戳前缀。
+        """普通控制台输出，签名对齐 print；终端默认色（黑字），无图标前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。
 
         实例存活期间官方 print 被拦截到本方法；多个参数自动转 str()
         后以 sep 拼接。
@@ -430,15 +451,15 @@ class Melog:
         self._console.log(*values, sep=sep, end=end, flush=flush)
 
     def success(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """绿色文字 + ✔ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """绿色文字 + ✔ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._console.success(*values, sep=sep, end=end, flush=flush)
 
     def error(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """红色文字 + ✘ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """红色文字 + ✘ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._console.error(*values, sep=sep, end=end, flush=flush)
 
     def warn(self, *values: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-        """黄色文字 + ⚠ 前缀，自动带 [HH:MM:SS] 时间戳前缀。"""
+        """黄色文字 + ⚠ 前缀，自动带 [MM-DD HH:MM:SS][文件名] 前缀。"""
         self._console.warn(*values, sep=sep, end=end, flush=flush)
 
     def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:

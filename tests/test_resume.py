@@ -29,15 +29,17 @@ def train_epochs(m, lengths, start=0):
 
 # ---------------------------------------------------------------- 会话文件
 def test_session_files_timestamped_and_distinct(tmp_path):
-    """多次训练同一目录：各写一个带时间戳的会话文件，互不覆盖。"""
+    """多次训练同一目录：各写一个带时间戳的会话文件（序号前缀递增），互不覆盖。"""
     m1 = make(tmp_path)
     m1.scalar({"loss": 1.0})
     m1.close()
     m2 = make(tmp_path)
     m2.scalar({"loss": 2.0})
     m2.close()
-    files = sorted((tmp_path / "exp").glob("metrics-*.melog"))
+    files = LogLoader.session_files(tmp_path / "exp")
     assert len(files) == 2
+    assert files[0].name.startswith("metrics-")   # 首个会话不加序号前缀
+    assert files[1].name.startswith("2.metrics-")  # 后续会话加序号前缀
     assert [len(r) for r in (list(MelogFileReader(f).records()) for f in files)] == [1, 1]
 
 
@@ -179,7 +181,7 @@ def test_resume_truncated_torn_tail(tmp_path):
     train_epochs(m1, [3])
     m1.close()
     run_dir = tmp_path / "exp"
-    log = next(run_dir.glob("metrics-*.melog"))
+    log = next(run_dir.glob("*metrics-*.melog"))
     with open(log, "r+b") as f:  # 模拟写 block 中途被杀
         f.seek(0, 2)
         f.write(b"\x01\x00\x00\x99")

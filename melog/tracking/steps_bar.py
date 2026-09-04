@@ -126,7 +126,7 @@ class StepsBar(tqdm):
             iterable: 可迭代对象（训练/验证循环）。
             total: 总步数；缺省时自动取 len(iterable)。
             epoch: 绑定该 epoch（epoch 内步数清零、全局 x 接续、行首
-                自动标注 "epoch N"）。
+                固定标注 "epoch N"，用户 desc 拼在其后）。
             metrics: MetricGroup；每次 feed 自动记录本卡本地值（实时
                 曲线 + bar 显示），自动从批次识别样本数供 Mean 精确
                 平均，迭代自然结束自动合并记录全局值并重置组内指标。
@@ -160,8 +160,11 @@ class StepsBar(tqdm):
         if not disable:
             # 嵌套时本条将覆盖栈顶：先擦掉栈顶在屏幕上的行，首帧在干净行上渲染
             host._bars.cover_top()
-        if epoch is not None and "desc" not in kwargs:
-            kwargs["desc"] = f"epoch {epoch}"
+        if epoch is not None:
+            # 行首固定标注 "epoch N"；用户传了 desc 时拼在 epoch 之后，
+            # 无需自己写 desc=f"epoch {epoch}"
+            desc = kwargs.pop("desc", None)
+            kwargs["desc"] = f"epoch {epoch} {desc}" if desc else f"epoch {epoch}"
         super().__init__(iterable=iterable, total=total, disable=disable, **kwargs)
         if metrics is not None:
             self._hook_metrics(metrics, host)

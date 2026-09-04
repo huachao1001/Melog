@@ -21,7 +21,7 @@ def lg(tmp_path):
 
 
 def read_log(tmp_path) -> str:
-    return (tmp_path / "test").glob("**/console-*.log").__next__().read_text(encoding="utf-8")
+    return (tmp_path / "test").glob("**/*console-*.log").__next__().read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- 控制台消息
@@ -58,7 +58,7 @@ def test_console_messages(tmp_path):
 
 
 def test_console_messages_timestamped(tmp_path):
-    """log/success/error/warn 自动带 [HH:MM:SS] 时间戳前缀；空内容不加。"""
+    """log/success/error/warn 自动带 [MM-DD HH:MM:SS][文件名] 前缀；空内容不加。"""
     import re
 
     saved = sys.stdout
@@ -70,8 +70,8 @@ def test_console_messages_timestamped(tmp_path):
         m.close()
     assert sys.stdout is saved
     text = read_log(tmp_path)
-    stamps = re.findall(r"\[\d{2}:\d{2}:\d{2}\] hello\n", text)
-    assert len(stamps) == 1  # 时间戳前缀格式正确且只出现一次
+    stamps = re.findall(r"\[\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\[test_core\] hello\n", text)
+    assert len(stamps) == 1  # 时间戳 + 调用方文件名前缀格式正确且只出现一次
     assert text.endswith("\n\n") or text.count("\n\n") >= 1  # 空行原样落盘
 
 
@@ -138,9 +138,10 @@ def test_reduce_invalid_type():
 def read_records(run_dir) -> list:
     """解析 run 目录全部会话日志为 (step, epoch, values) 记录列表。"""
     from melog.storage.melog_file import MelogFileReader
+    from melog.web.loader import LogLoader
 
     out = []
-    for f in sorted(run_dir.glob("metrics*.melog")):
+    for f in LogLoader.session_files(run_dir):
         out.extend(MelogFileReader(f).records())
     return out
 

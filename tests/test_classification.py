@@ -309,6 +309,6 @@ def test_group_compute_persists_accuracy(tmp_path):
 
     from melog.storage.melog_file import MelogFileReader
 
-    path = next((tmp_path / "t").glob("metrics*.melog"))
+    path = next((tmp_path / "t").glob("*metrics-*.melog"))
     records = [r for rec in MelogFileReader(path).records() for r in rec[2].items()]
     assert records == [("acc", 1.0)]

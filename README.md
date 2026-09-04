@@ -19,7 +19,7 @@ epoch 3 loss=0.2153 acc=0.8974 lr=8.2e-04 ━━━━━━━━━━━─�
 ## 安装
 
 ```bash
-pip install -e .            # 基础安装
+pip install melog            # 基础安装，来自 PyPI
 ```
 
 多 GPU 合并基于 `torch.distributed`，假定环境中已装好 PyTorch；未装 torch 时自动退化单进程。

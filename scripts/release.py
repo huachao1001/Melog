@@ -40,7 +40,10 @@ def current_version() -> str:
 
 def commits_since_last_bump() -> list[str]:
     """自上次改动 pyproject.toml version 行以来的提交（不含版本提交本身）。"""
-    last = sh("git", "log", "--format=%H", f"-S{VERSION_PATTERN}", "--", "pyproject.toml")
+    # -G（匹配行内容变化）而非 -S（出现次数变化）：版本号替换不改变出现次数；
+    # 可能匹配多笔提交，取最近一笔（git log 最新在前）为基线
+    last = sh("git", "log", "--format=%H", f"-G{VERSION_PATTERN}", "--", "pyproject.toml")
+    last = last.splitlines()[0] if last else ""
     rng = f"{last}..HEAD" if last else "HEAD"
     log = sh("git", "log", "--format=%B%x00", rng)
     return [c for c in log.split("\0") if c.strip()]

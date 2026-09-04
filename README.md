@@ -176,6 +176,17 @@ for epoch in range(epochs):
   以免各 rank 在 all_gather 处互相等待；所有 rank 都会执行，落盘仅 rank0）。
   `feed(..., write=False)` 关闭逐 batch 实时写入（如验证集场景），epoch 末
   仍自动合并记录，无需手动 scalar
+- `on_end=...`：epoch 末自动记录完成后触发的回调，参数为**跨 GPU 合并后的
+  指标字典**（与落盘值一致，未观测到的指标为 NaN）。典型用途如按验证指标
+  保存 checkpoint。需配合 `metrics` 使用；所有 rank 都会执行（合并是集合
+  操作），各卡收到的值一致，仅想主卡执行时在回调内自行判断 rank；
+  提前 break / 抛异常不触发：
+
+  ```python
+  for _ in StepsBar(val_loader, epoch=epoch, metrics=val_metrics,
+                    on_end=lambda m: save_if_best(m["acc"])):
+      val_metrics.feed(args=(logits, labels), loss=loss, write=False)
+  ```
 
 ### feed 如何分发观测
 
@@ -360,7 +371,7 @@ f1.result()                  # 跨 GPU 合并并计算（单进程直通）
 
 - `scalar(metrics, advance=0)` — 记录一批指标（dict 或 MetricGroup，后者跨 GPU 合并由内部完成）；坐标由 `StepsBar` 自动管理（epoch 绑定 + 内部计步），调用频率即记录粒度（见上文）
 - `image(name, data, caption=None)` / `audio(name, data, sr=22050, ...)` — 记录图像 / 音频，自动附着最近一次记录位置，Web 端页签展示（见上文）
-- `StepsBar(iterable, epoch=None, metrics=None)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录并重置组内指标（提前 break / 异常不触发）（见上文）
+- `StepsBar(iterable, epoch=None, metrics=None, on_end=None)` — tqdm 风格训练进度条（`from melog import StepsBar`，模块级 `melog.stepsbar(...)` 等价），**epoch 循环必须用它包裹**：包裹可迭代对象即自动推进，`scalar()` 指标实时显示在条上；`epoch=...` 绑定当前 epoch 并统一管理坐标；`metrics=...` 传入 MetricGroup 时 bar 实时显示本卡本地值（feed 零通信刷新），迭代自然结束自动 gather 全局值合并记录并重置组内指标（提前 break / 异常不触发）；`on_end=...` 在合并记录后收到合并后的指标字典（见上文）
 - 允许嵌套（如训练 bar 内嵌验证 bar）：内部以栈管理，`current_bar()` 返回栈顶即当前环境；`scalar()` 的 postfix 与 `advance` 自动作用于栈顶，下层 bar 暂停渲染（数据照常累计），栈顶关闭后自动恢复下层渲染；提前 break / 抛异常时 bar 自动出栈（如需立即定稿可 `close()` 或用 with），否则等引用释放时兜底
 - `current_bar()` — 当前栈顶进度条（无打开的 bar 时 `None`）；深层函数需要手动推进 / 读数 / 写 postfix 时取它，免层层传参
 - `log / success / error / warn` — print 风格控制台消息（`[MM-DD HH:MM:SS][文件名]` 前缀 + 图标 + 彩色文字），`print` 被拦截改走 `log()`；多 GPU 下默认仅 rank0 输出，`all_ranks=True` 时各卡都输出（见上文）

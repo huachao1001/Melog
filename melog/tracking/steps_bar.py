@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 
 from ..metrics import MetricGroup
 from ..utils.tqdm import tqdm
@@ -88,7 +88,8 @@ class StepsBar(tqdm):
     代 range）回退等权平均并警告一次。迭代自然结束再 gather 所有 rank
     的状态、合并记录全局值一次并重置组内指标（开启下一轮统计）——
     write=False 时也自动执行，无需手动 scalar。曲线上 epoch 内是主卡
-    实时值、epoch 末是跨 GPU 精确合并的结果::
+    实时值、epoch 末是跨 GPU 精确合并的结果。on_end=... 可在 epoch 末
+    自动记录之后收到合并后的指标字典（如按验证指标保存 checkpoint）::
 
         for _ in StepsBar(loader, epoch=e, metrics=metrics):
             metrics.feed(...)
@@ -118,6 +119,7 @@ class StepsBar(tqdm):
         total: Optional[float] = None,
         epoch: Optional[int] = None,
         metrics: Optional[MetricGroup] = None,
+        on_end: Optional[Callable[[Dict[str, Any]], None]] = None,
         **kwargs: Any,
     ):
         """绑定全局活动实例（melog.init 创建的）并打开进度条。
@@ -130,6 +132,11 @@ class StepsBar(tqdm):
             metrics: MetricGroup；每次 feed 自动记录本卡本地值（实时
                 曲线 + bar 显示），自动从批次识别样本数供 Mean 精确
                 平均，迭代自然结束自动合并记录全局值并重置组内指标。
+            on_end: 迭代自然结束（epoch 末）时的回调，参数为跨 GPU
+                合并后的指标字典（与 scalar() 落盘的值一致；未观测到
+                数据的指标为 NaN）。需配合 metrics 使用；所有 rank 都
+                会执行（合并是集合操作），各卡收到的值一致，仅想主卡
+                执行时在回调内自行判断 rank。提前 break / 抛异常不触发。
             **kwargs: 其余参数透传 tqdm（desc / leave / mininterval 等）。
         """
         from ..core import current  # 延迟导入：core 也引用本模块，避免循环
@@ -137,6 +144,8 @@ class StepsBar(tqdm):
         host: "Melog" = current()
         if metrics is not None and not isinstance(metrics, MetricGroup):
             raise TypeError(f"metrics 须为 MetricGroup，收到 {type(metrics).__name__}")
+        if on_end is not None and metrics is None:
+            raise ValueError("on_end 需配合 metrics 使用（回调参数为合并后的指标）")
         if epoch is not None:
             host._bind_epoch(epoch)  # 续训时该 epoch 已有记录会先截断重叠区
         if metrics is not None:
@@ -153,9 +162,12 @@ class StepsBar(tqdm):
                         "需精确加权时在 feed 中传 (值, 观测数) 元组"
                     )
 
-            iterable = EpochEndIterable(
-                iterable, lambda: host._log_group(metrics, reset=True), on_item=_on_item
-            )
+            def _on_epoch_end() -> None:
+                result = host._log_group(metrics, reset=True)
+                if on_end is not None:
+                    on_end(result)
+
+            iterable = EpochEndIterable(iterable, _on_epoch_end, on_item=_on_item)
         disable = (not host._is_primary) or (not host._enable_progress) or _progress_disabled()
         if not disable:
             # 嵌套时本条将覆盖栈顶：先擦掉栈顶在屏幕上的行，首帧在干净行上渲染

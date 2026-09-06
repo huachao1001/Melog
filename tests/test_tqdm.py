@@ -11,7 +11,7 @@ from melog.core import Melog
 from melog.storage.mirror import Mirror
 from melog.tracking.console import Console
 from melog.utils.bar_stack import BarStack
-from melog.utils.tqdm import tqdm
+from melog.utils.tqdm import _display_width, BAR_WIDTH, _BAR_MIN, tqdm
 
 
 def read(path) -> str:
@@ -234,6 +234,67 @@ def test_tqdm_color_on_tty_plain_on_pipe():
     out3 = io.StringIO()
     tqdm(total=4, file=out3, mininterval=0, colour=False).close()
     assert "\x1b[" not in out3.getvalue()
+
+
+def test_tqdm_fills_terminal_width(monkeypatch):
+    """终端下占满整行：进度条吃掉固定段之外的全部剩余列，恰好一行不换行。"""
+    monkeypatch.setenv("COLUMNS", "60")
+    monkeypatch.setattr("time.monotonic", lambda: 0.0)  # 冻结时钟：速率段定宽，布局确定
+    out = _TTY()
+    bar = tqdm(total=4, file=out, mininterval=0)
+    bar.update(2)
+    bar.set_postfix(loss=0.5)
+    bar.close()
+    line = [s for s in out.getvalue().split("\r") if "━" in s][-1]
+    plain = re.sub(r"\x1b\[[0-9;:?]*[ -/]*[@-~]", "", line).rstrip()
+    assert _display_width(plain) == 60  # 恰好占满整行（宽终端下条形随之加长）
+    assert plain.count("━") + plain.count("─") > BAR_WIDTH  # 进度条超出基准宽度
+    assert len(plain) <= 120  # 绝不换行（60 列 + 宽字符至多翻倍）
+
+
+def test_tqdm_shrinks_bar_then_truncates_postfix(monkeypatch):
+    """剩余列不足：进度条先收缩到最小宽度；仍放不下时指标区以省略号收尾。"""
+    monkeypatch.setenv("COLUMNS", "40")
+    monkeypatch.setattr("time.monotonic", lambda: 0.0)
+    out = _TTY()
+    bar = tqdm(total=10, file=out, mininterval=0)
+    bar.update(1)
+    bar.set_postfix(loss=0.5, acc=0.25)
+    bar.close()
+    line = [s for s in out.getvalue().split("\r") if "━" in s][-1]
+    plain = re.sub(r"\x1b\[[0-9;:?]*[ -/]*[@-~]", "", line).rstrip()
+    assert _display_width(plain) == 40  # 收缩后仍恰好占满整行、不换行
+    assert plain.count("━") + plain.count("─") == _BAR_MIN  # 进度条已收缩到最小
+    assert "loss=0…" in plain  # 指标区部分保留 + 省略号收尾
+    assert "acc" not in plain  # 装不下的整格丢弃
+
+
+def test_tqdm_wide_chars_count_as_two_columns(monkeypatch):
+    """宽字符（CJK desc / 指标名）按 2 列计：占满整行且截断不超界。"""
+    monkeypatch.setenv("COLUMNS", "60")
+    monkeypatch.setattr("time.monotonic", lambda: 0.0)
+    out = _TTY()
+    bar = tqdm(total=4, desc="训练", file=out, mininterval=0)
+    bar.update(1)
+    bar.set_postfix(loss=0.5)
+    bar.close()
+    line = [s for s in out.getvalue().split("\r") if "━" in s][-1]
+    plain = re.sub(r"\x1b\[[0-9;:?]*[ -/]*[@-~]", "", line).rstrip()
+    assert _display_width(plain) == 60  # 显示宽度恰好占满（len() < 显示宽度）
+    assert len(plain) == 58  # 宽字符按 2 列：len 比显示宽度小 2
+    assert "训练" in plain
+
+
+def test_tqdm_fixed_bar_width_on_pipe():
+    """重定向 / 管道没有列宽概念：进度条保持基准宽度，指标不截断。"""
+    out = io.StringIO()
+    bar = tqdm(total=10, file=out, mininterval=0)
+    bar.update(1)
+    bar.set_postfix(loss=0.5, acc=0.25)
+    bar.close()
+    line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1].rstrip()
+    assert line.count("━") + line.count("─") == BAR_WIDTH  # 基准宽度不变
+    assert "loss=0.5000" in line and "acc=0.2500" in line  # 指标不截断
 
 
 def test_melog_progress_iterates_and_autoupdates(tmp_path):

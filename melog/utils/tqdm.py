@@ -22,6 +22,14 @@
 各段定宽右对齐：数值位数变化不改变行宽，尾部（条形图/百分比/耗时）
 逐帧位置稳定不抖动。
 
+终端下自适应列宽渲染（重定向 / 管道 / 日志文件按固定宽度）：内容不超行，
+绝不自动换行——
+- 进度条吃掉固定段（desc / 指标 / 百分比 / 计数 / 耗时）之外的**全部剩余
+  列**，恰好占满整行（宽终端下条形随之加长）；
+- 剩余列不足时进度条收缩到最小宽度（指标区优先保全）；
+- 条已最小仍放不下指标时，指标区截断显示、以省略号收尾（终端下避免换行
+  破坏原地重绘；宽字符按 2 列计，截断不超界）。
+
 每帧以 ``\\r`` 结尾：终端原地重绘；若标准输入输出已被 Mirror 接管，
 日志文件里也保持同一行进度条（就地刷新、节流落盘，见 melog.storage.mirror）。
 颜色只在输出流为终端（TTY）时启用，重定向 / 管道 / 日志文件始终纯文本。
@@ -29,13 +37,17 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 __all__ = ["tqdm"]
 
-BAR_WIDTH = 24  # 进度条字符宽度
+BAR_WIDTH = 24  # 进度条基准字符宽度（终端下为弹性宽度，不小于 _BAR_MIN）
+_BAR_MIN = 10  # 进度条最小字符宽度（终端列不足时收缩到此，指标区再让位）
+_ELLIPSIS = "…"  # 指标区截断收尾的省略号
 _FILL, _EMPTY = "━", "─"  # 横线字符：垂直居中、细条、相邻格无缝拼接
 
 # Melog 主题色（与 Web 面板 accent 一致的紫色）+ 分段点缀色
@@ -58,6 +70,88 @@ def _is_tty(stream) -> bool:
         return bool(stream.isatty())
     except (AttributeError, ValueError, OSError):
         return False
+
+
+def _term_width(stream) -> Optional[int]:
+    """终端可用列数（仅 TTY；重定向 / 管道返回 None，按固定宽度渲染）。
+
+    进度条行按列数自适应（占满整行、收缩、截断），管道与日志文件没有
+    列宽概念，保持固定宽度布局。
+    """
+    if not _is_tty(stream):
+        return None
+    try:
+        cols = os.get_terminal_size(stream.fileno()).columns
+    except (AttributeError, ValueError, OSError):
+        try:  # 自定义流无 fileno：退回 COLUMNS 环境变量 / 默认列数
+            cols = shutil.get_terminal_size().columns
+        except (AttributeError, ValueError, OSError):
+            return None
+    return int(cols) or None
+
+
+def _char_w(ch: str) -> int:
+    """单字符显示列数：East Asian Wide / Fullwidth（CJK、全角标点等）按 2。"""
+    o = ord(ch)
+    if 0x1100 <= o <= 0x115F or 0x2E80 <= o <= 0xA4CF or 0xAC00 <= o <= 0xD7A3 \
+            or 0xF900 <= o <= 0xFAFF or 0xFE30 <= o <= 0xFE4F \
+            or 0xFF00 <= o <= 0xFF60 or 0xFFE0 <= o <= 0xFFE6 \
+            or 0x20000 <= o <= 0x3FFFD:
+        return 2
+    return 1
+
+
+def _display_width(s: str) -> int:
+    """字符串显示列数（ANSI 零宽由调用方保证不在 s 中；宽字符按 2 计）。"""
+    return sum(_char_w(ch) for ch in s)
+
+
+def _fit_text(s: str, width: int) -> str:
+    """按显示列数截断 s（宽字符不超界）；恰好放下则原样返回。
+
+    保留左侧内容（数值右对齐时左侧空白先让位）；width <= 0 返回空串。
+    """
+    if _display_width(s) <= width:
+        return s
+    out = []
+    w = 0
+    for ch in s:
+        cw = _char_w(ch)
+        if w + cw > width:
+            break
+        out.append(ch)
+        w += cw
+    return "".join(out)
+
+
+def _fit_cells(cells: List[Tuple[str, str, int, str, str]],
+               budget: int) -> List[Tuple[str, str, int, str, str]]:
+    """把指标格截进 budget 显示列（终端下进度条已最小时让指标区收尾）。
+
+    装不下的整格丢弃；剩余空间够 "k=…" 时最后一格部分保留、以省略号
+    收尾（省略号灰显，绝不超界）。cells 为 (纯文本, 颜色文本, 显示宽,
+    键名, 值文本)，格间空格计入预算。
+    """
+    if budget <= 0:
+        return []
+    out: List[Tuple[str, str, int, str, str]] = []
+    used = 0
+    for plain, color, w, k, val in cells:
+        gap = 1 if out else 0
+        if used + gap + w <= budget:
+            out.append((plain, color, w))
+            used += gap + w
+            continue
+        rest = budget - used - gap  # 本格可用列
+        key_w = _display_width(k)
+        if rest >= key_w + 2:  # "k=" 与省略号至少可容（值可空 → "k=…"）
+            val_cut = _fit_text(val, rest - key_w - 2).lstrip()  # 右对齐空白先让位
+            plain_cut = f"{k}={val_cut}{_ELLIPSIS}"
+            color_cut = (f"{_DIM}{k}={_RESET}{_WHITE}{val_cut}{_RESET}"
+                         f"{_DIM}{_ELLIPSIS}{_RESET}")
+            out.append((plain_cut, color_cut, _display_width(plain_cut)))
+        break  # 再后的整格一律丢弃
+    return out
 
 
 def _fmt_clock(seconds: float) -> str:
@@ -84,6 +178,12 @@ def _fmt_value(value: Any) -> str:
 
 class tqdm:
     """进度条：迭代器 / 手动 update 两种用法，接口对齐 tqdm.tqdm。
+
+    终端（TTY）下按终端列数自适应渲染：进度条为弹性段，吃掉固定段
+    之外的全部剩余列恰好占满整行；剩余不足时收缩到最小宽度（指标区
+    优先保全），仍放不下的指标以省略号收尾——内容不超行、绝不换行，
+    宽字符按 2 列计。重定向 / 管道 / 日志文件无列宽概念，按固定宽度
+    （BAR_WIDTH）渲染、指标不截断。
 
     Args:
         iterable: 可迭代对象（提供时支持 for 直接迭代）。
@@ -287,23 +387,25 @@ class tqdm:
     def render(self, force: bool = False) -> None:
         """把当前状态渲染为一行并以 \\r 结尾输出（终端原地重绘）。
 
-        终端下带 Melog 主题色；pad 计算按可见宽度（ANSI 码零显示宽度）。
+        终端下带 Melog 主题色，并按终端列数自适应（占满整行 / 收缩 /
+        截断，见 _format）；pad 计算按可见宽度（ANSI 码零显示宽度）。
         内容与上次渲染相同且非强制时跳过：屏幕已是最新，日志文件侧也不
         重复落盘；force 用于屏幕行被消息擦除、子条覆盖后的修复性重绘。
         """
         stream = self._stream()
-        line, plain = self._format(self._use_color(stream))
+        line, plain = self._format(self._use_color(stream), _term_width(stream))
+        plain_w = _display_width(plain)
         if not force and plain == self._last_plain:
             return
         # 行变短时用空格覆盖残留（文件侧由 Mirror 截断重写并剥离颜色码）
-        pad = " " * max(0, self._rendered_len - len(plain))
+        pad = " " * max(0, self._rendered_len - plain_w)
         stream.write(line + pad + "\r")
         stream.flush()
-        self._rendered_len = len(plain) + len(pad)
+        self._rendered_len = plain_w + len(pad)
         self._last_render = time.monotonic()
         self._last_plain = plain
 
-    def _format(self, use_color: bool) -> Tuple[str, str]:
+    def _format(self, use_color: bool, width: Optional[int] = None) -> Tuple[str, str]:
         """渲染当前状态，返回 (终端行[含颜色码], 纯文本行)。
 
         布局：[n/total] 最前，指标随后，条形图/百分比/[耗时<剩余 速率]
@@ -312,6 +414,14 @@ class tqdm:
         变化不引起行宽摆动，尾部逐帧位置稳定（仅出现更宽数值时整体
         右移一次）。进度条的填充/剩余两段直接拼接为一段（中间无空格），
         仅颜色不同。
+
+        width 为终端列数时按列自适应（内容不超行、不换行）：
+        - 进度条为弹性段，吃掉固定段（desc / 指标 / 百分比 / 计数 / 耗时）
+          之外的**全部剩余列**，恰好占满整行（宽终端下条形随之加长）；
+        - 剩余列不足时进度条收缩到 _BAR_MIN（指标区优先保全）；
+        - 条已最小仍放不下指标时，指标区截断、以省略号收尾。
+        width 为 None（重定向 / 管道 / 日志文件侧没有列宽概念）时按固定
+        宽度渲染，进度条恒为 BAR_WIDTH、指标不截断（与旧行为一致）。
         """
         def seg(text: str, code: str = "") -> Tuple[str, str]:
             if not text:
@@ -321,29 +431,9 @@ class tqdm:
             return (text, text)
 
         elapsed = time.monotonic() - self._t0
-        parts: List[Tuple[str, str]] = []
-        if self.desc:
-            parts.append(seg(str(self.desc), _BOLD_WHITE))
+        desc_seg = seg(str(self.desc), _BOLD_WHITE) if self.desc else ("", "")
 
         rate = self.n / elapsed if elapsed > 0 and self.n > 0 else 0.0
-        postfix = ("", "")
-        if self.postfix:
-            plain_cells = []
-            color_cells = []
-            for k, v in self.postfix.items():
-                val = _fmt_value(v)
-                w = self._value_w.get(k, 0)
-                if len(val) > w:
-                    w = len(val)
-                    self._value_w[k] = w
-                val = val.rjust(w)
-                plain_cells.append(f"{k}={val}")
-                # 指标名灰、数值白，视觉上把名字与读数分开
-                color_cells.append(f"{_DIM}{k}={_RESET}{_WHITE}{val}{_RESET}")
-            if not use_color:
-                color_cells = plain_cells
-            postfix = (" ".join(color_cells), " ".join(plain_cells))
-
         time_part = _fmt_clock(elapsed)
         if self.total and rate > 0:
             time_part += f"<{_fmt_clock((self.total - self.n) / rate)}"
@@ -362,16 +452,87 @@ class tqdm:
 
         if self.total:
             frac = min(max(self.n / self.total, 0.0), 1.0)
-            filled = int(frac * BAR_WIDTH)
-            bar = self._render_bar(filled, use_color)
             n_str = str(self.n).rjust(len(str(self.total)))
+            pct_seg = seg(f"{100 * frac:5.1f}%", _ACCENT_BOLD)
+            count_seg = seg(f"[{n_str}/{self.total}]", _CYAN)
+        else:
+            frac = None
+            pct_seg = ("", "")
+            count_seg = seg(f"[{self.n}{self.unit}]", _CYAN)
+
+        # 指标格 (纯文本, 颜色文本, 显示宽, 键名, 值文本)：值定宽右对齐，
+        # 供弹性布局整格丢弃 / 部分截断（颜色版本由截断后重建）
+        cells: List[Tuple[str, str, int, str, str]] = []
+        postfix_w = 0
+        for k, v in self.postfix.items():
+            val = _fmt_value(v)
+            vw = _display_width(val)
+            w = self._value_w.get(k, 0)
+            if vw > w:
+                w = vw
+                self._value_w[k] = w
+            val = " " * (w - vw) + val  # 显示宽右对齐（宽字符按 2 计）
+            plain = f"{k}={val}"
+            # 指标名灰、数值白，视觉上把名字与读数分开
+            color = f"{_DIM}{k}={_RESET}{_WHITE}{val}{_RESET}"
+            cells.append((plain, color, _display_width(plain), k, val))
+        postfix_w = sum(c[2] for c in cells) + max(0, len(cells) - 1)
+
+        # ---- 弹性布局（仅终端有列数时）：占满整行 → 收缩进度条 → 截断指标
+        bar_w: Optional[int] = BAR_WIDTH if self.total else None
+        if width is not None:
+            fixed_segs = [s for s in (desc_seg, pct_seg, count_seg, *tail) if s[0]]
+            fixed_w = sum(_display_width(p[1]) for p in fixed_segs)
+
+            def _budget(cells_present: bool) -> int:
+                # 列预算：扣掉固定段与各段间空格后的弹性空间
+                n = len(fixed_segs) + (1 if cells_present else 0) + (1 if self.total else 0)
+                return width - fixed_w - max(0, n - 1)
+
+            if cells:
+                budget = _budget(True)
+                if self.total:
+                    bar_w = budget - postfix_w  # 指标 Desired 之外全给进度条（占满整行）
+                    if bar_w < _BAR_MIN:
+                        # 剩余不足：进度条先收缩到最小宽度，指标区再让位
+                        fit = _fit_cells(cells, budget - _BAR_MIN)
+                        if fit:
+                            dropped = len(fit) < len(cells)  # 有整格装不下
+                            used = sum(c[2] for c in fit) + max(0, len(fit) - 1)
+                            # 末格已被部分截断（自带省略号）时不再补标记
+                            if dropped and budget - used >= 2 \
+                                    and not fit[-1][0].endswith(_ELLIPSIS):
+                                # 补一个省略号标记（需求优先级高于条宽下限，下限至多让 2 列）
+                                marker = (_ELLIPSIS, f"{_DIM}{_ELLIPSIS}{_RESET}", 1)
+                                fit = fit + [marker]
+                                used += 2  # 格间空格 + 省略号
+                            cells = fit
+                            bar_w = budget - used  # 指标截断后的剩余列归还进度条（恰好占满）
+                        else:  # 指标一格都放不下：整段让位，进度条吃满剩余列
+                            cells = []
+                            bar_w = max(1, _budget(False))
+                else:  # 无进度条段（未绑 total）：指标独占剩余列，超宽省略号截断
+                    cells = _fit_cells(cells, budget)
+            elif self.total:
+                bar_w = max(1, _budget(False))
+
+        postfix: Tuple[str, str] = ("", "")
+        if cells:
+            plain_cells = [c[0] for c in cells]
+            color_cells = [c[1] for c in cells] if use_color else plain_cells
+            postfix = (" ".join(color_cells), " ".join(plain_cells))
+
+        parts: List[Tuple[str, str]] = [desc_seg]
+        if self.total:
+            filled = int(frac * bar_w)
             parts.append(postfix)
-            parts.append((bar, _FILL * filled + _EMPTY * (BAR_WIDTH - filled)))
-            parts.append(seg(f"{100 * frac:5.1f}%", _ACCENT_BOLD))
-            parts.append(seg(f"[{n_str}/{self.total}]", _CYAN))
+            parts.append((self._render_bar(filled, bar_w, use_color),
+                          _FILL * filled + _EMPTY * (bar_w - filled)))
+            parts.append(pct_seg)
+            parts.append(count_seg)
         else:
             parts.append(postfix)
-            parts.append(seg(f"[{self.n}{self.unit}]", _CYAN))
+            parts.append(count_seg)
         parts.extend(tail)
 
         drop_empty = lambda p: bool(p[0])  # noqa: E731  # 空片段不占位，避免多余空格
@@ -379,10 +540,10 @@ class tqdm:
         return " ".join(p[0] for p in kept), " ".join(p[1] for p in kept)
 
     @staticmethod
-    def _render_bar(filled: int, use_color: bool) -> str:
+    def _render_bar(filled: int, width: int, use_color: bool) -> str:
         """进度条本体：填充段逐格做紫→粉线性插值（无色块台阶），剩余轨道深灰。"""
         if not use_color:
-            return _FILL * filled + _EMPTY * (BAR_WIDTH - filled)
+            return _FILL * filled + _EMPTY * (width - filled)
         out = []
         for i in range(filled):
             t = i / (filled - 1) if filled > 1 else 0.0
@@ -390,6 +551,6 @@ class tqdm:
             out.append(f"\x1b[38;2;{r};{g};{b}m{_FILL}")
         if filled:
             out.append(_RESET)
-        if filled < BAR_WIDTH:
-            out.append(f"{_BAR_EMPTY}{_EMPTY * (BAR_WIDTH - filled)}{_RESET}")
+        if filled < width:
+            out.append(f"{_BAR_EMPTY}{_EMPTY * (width - filled)}{_RESET}")
         return "".join(out)

@@ -61,11 +61,13 @@ def stepsbar(
     tab: Optional[str] = None,
     metrics: Optional[MetricGroup] = None,
     reduce: bool = True,
+    print_result: bool = True,
     **kwargs: Any,
 ) -> StepsBar:
     """模块级便捷接口：等价于 ``StepsBar(iterable, ...)``。"""
     return StepsBar(iterable, total=total, epoch=epoch, tab=tab,
-                    metrics=metrics, reduce=reduce, **kwargs)
+                    metrics=metrics, reduce=reduce, print_result=print_result,
+                    **kwargs)
 
 
 def scalar(

@@ -17,7 +17,7 @@ import os
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 
 from ..metrics import MetricGroup
-from ..utils.tqdm import tqdm
+from ..utils.tqdm import tqdm, _fmt_value
 from ..utils.epoch_end_iterable import EpochEndIterable
 
 if TYPE_CHECKING:
@@ -94,9 +94,11 @@ class StepsBar(tqdm):
     时 gather 所有 rank 的状态、合并记录全局值一次并重置组内指标（开启
     下一轮统计）——write=False 时也自动执行，无需手动 scalar；
     reduce=False 时只重置、不做合并落盘。曲线上 epoch 内是本卡实时值、
-    epoch 末（reduce=True）是跨 GPU 精确合并的结果。on_end=... 可在
-    epoch 末自动记录之后收到合并后的指标字典（如按验证指标保存
-    checkpoint）::
+    epoch 末（reduce=True）是跨 GPU 精确合并的结果。**bar 跑完自动打印
+    本 bar 监控的 metrics 最终结果**（reduce=True 打印合并后的结果，
+    reduce=False 打印本卡本地累计值；print_result=False 关闭）。
+    on_end=... 可在 epoch 末自动记录之后收到合并后的指标字典（如按
+    验证指标保存 checkpoint）::
 
         for _ in StepsBar(loader, epoch=e, tab="val", metrics=metrics):
             metrics.feed(write=False)
@@ -142,6 +144,7 @@ class StepsBar(tqdm):
         tab: Optional[str] = None,
         metrics: Optional[MetricGroup] = None,
         reduce: bool = True,
+        print_result: bool = True,
         on_end: Optional[Callable[[Dict[str, Any]], None]] = None,
         **kwargs: Any,
     ):
@@ -171,6 +174,12 @@ class StepsBar(tqdm):
                 在对齐位置调用）；epoch 末也不做合并落盘，仅 reset 开启
                 下一轮统计。默认 True（验证 / 测试结果需跨卡合并的场景，
                 如对验证集多卡合并）。
+            print_result: 迭代自然结束（epoch 末）时是否把本 bar 监控的
+                metrics 最终结果打印到控制台（bar 行上方一行，与日志
+                镜像一致）：reduce=True 打印**跨卡合并后的结果**（与
+                落盘值一致），reduce=False 打印本卡本地累计值（重置前）。
+                未观测到的指标（NaN）与非数值结果不打印；仅 rank0 输出。
+                需配合 metrics 使用，无 metrics 的 bar 不打印。
             on_end: 迭代自然结束（epoch 末）时的回调，参数为跨 GPU
                 合并后的指标字典（与 scalar() 落盘的值一致；未观测到
                 数据的指标为 NaN）。需配合 metrics 使用（且 reduce=True；
@@ -212,10 +221,20 @@ class StepsBar(tqdm):
             def _on_epoch_end() -> None:
                 if reduce:
                     result = host._log_group(metrics, tab=tab, reset=True)
+                    if print_result:
+                        # 落盘键带分区前缀：打印剥离前缀、显示用户注册名（与 postfix 一致）
+                        shown = {
+                            (k[len(tab) + 1:] if tab and k.startswith(f"{tab}/") else k): v
+                            for k, v in result.items()
+                        }
+                        self._print_summary(host, shown)
                     if on_end is not None:
                         on_end(result)
                 else:
-                    # 只看本卡实时值：epoch 末不做合并落盘，仅开启新一轮统计
+                    # 只看本卡实时值：epoch 末不做合并落盘，打印本地累计值
+                    # （重置前）后仅开启新一轮统计
+                    if print_result:
+                        self._print_summary(host, metrics.local())
                     metrics.reset()
 
             iterable = EpochEndIterable(iterable, _on_epoch_end, on_item=_on_item)
@@ -233,6 +252,25 @@ class StepsBar(tqdm):
             self._hook_metrics(metrics, host, tab)
         host._bars.push(self, metrics)
         self.on_close = lambda: host._bars.forget(self)
+
+    def _print_summary(self, host: "Melog", values: Dict[str, Any]) -> None:
+        """打印本 bar 监控的 metrics 最终结果（消息行，bar 行上方）。
+
+        reduce=True 由 epoch 末合并记录调用（跨卡合并后的结果，与落盘
+        一致）；reduce=False 打印本卡本地累计值（重置前）。未观测到的
+        指标（NaN）与非数值结果（如混淆矩阵）不打印；host.log 仅
+        rank0 输出。无观测值时整行跳过。
+        """
+        items = {
+            k: v for k, v in values.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            and v == v and v != float("inf") and v != float("-inf")
+        }
+        if not items:
+            return
+        text = ", ".join(f"{k}={_fmt_value(v)}" for k, v in items.items())
+        desc = str(self.desc) if self.desc else ""
+        host.log(f"{desc} 结果: {text}" if desc else f"结果: {text}")
 
     def _hook_metrics(self, metrics: MetricGroup, host: "Melog",
                       tab: Optional[str] = None) -> None:

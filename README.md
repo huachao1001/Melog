@@ -179,6 +179,11 @@ for epoch in range(epochs):
   以免各 rank 在 all_gather 处互相等待；所有 rank 都会执行，落盘仅 rank0）。
   `feed(..., write=False)` 关闭逐 batch 实时写入（如验证集场景），epoch 末
   仍自动合并记录，无需手动 scalar
+- **bar 跑完自动打印最终结果**：`StepsBar(metrics=...)` 迭代自然结束时把
+  本 bar 监控的 metrics 最终结果打印到控制台（bar 行上方一行）——
+  `reduce=True` 打印**跨卡合并后的结果**（与落盘值一致），`reduce=False`
+  打印本卡本地累计值（重置前）；未观测到的指标（NaN）与非数值结果不
+  打印，仅 rank0 输出；`print_result=False` 关闭
 - `on_end=...`：epoch 末自动记录完成后触发的回调，参数为**跨 GPU 合并后的
   指标字典**（与落盘值一致，未观测到的指标为 NaN）。典型用途如按验证指标
   保存 checkpoint。需配合 `metrics` 使用且 `reduce=True`（reduce=False 时

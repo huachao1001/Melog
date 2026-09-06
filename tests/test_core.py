@@ -377,6 +377,53 @@ def test_stepsbar_reduce_off_scoped_to_bar(lg):
     assert [r["value"] for r in snap["val/loss"]] == [0.0, 0.5, 0.5]
 
 
+def test_stepsbar_print_result_off(lg, capsys):
+    """print_result=False：epoch 末不打印最终结果。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"loss": Mean()})
+    for _ in StepsBar(range(2), epoch=0, metrics=group, print_result=False):
+        group.feed(loss=1.0)
+    assert "结果:" not in capsys.readouterr().out
+
+
+def test_stepsbar_prints_reduced_result(lg, capsys):
+    """StepsBar 跑完自动打印最终结果：reduce=True 打印跨卡合并后的值（注册名）。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"loss": Mean(), "acc": Mean()})
+    for i in StepsBar(range(3), epoch=0, tab="val", metrics=group):
+        group.feed(loss=float(i + 1), acc=0.9)
+    out = capsys.readouterr().out
+    assert "结果: loss=2.0000, acc=0.9000" in out  # 合并后的最终值（mean(1,2,3)=2）
+    assert "val/" not in out.split("结果:")[-1]  # 前缀剥离显示注册名
+
+
+def test_stepsbar_reduce_off_prints_local_result(lg, capsys):
+    """reduce=False 打印本卡本地累计值（重置前）。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"loss": Mean()})
+    for i in StepsBar(range(3), epoch=0, tab="train", metrics=group, reduce=False):
+        group.feed(loss=float(i + 1))
+    out = capsys.readouterr().out
+    assert "结果: loss=2.0000" in out
+    assert group.local()["loss"] != group.local()["loss"]  # 打印后才重置
+
+
+def test_stepsbar_result_print_skips_unobserved(lg, capsys):
+    """未观测到的指标（NaN）与非数值结果不打印。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"loss": Mean(), "acc": Mean()})  # acc 未观测 -> NaN
+    for _ in StepsBar(range(2), epoch=0, metrics=group, reduce=False):
+        group.feed(loss=1.0)
+    out = capsys.readouterr().out
+    assert "结果: loss=1.0000" in out
+    assert "acc" not in out.split("结果:")[-1] and "nan" not in out.lower()
+
+
+
 def test_stepsbar_no_auto_log_on_break(lg):
     """提前 break：不触发 epoch 末全局记录（各 rank 迭代进度可能不一致）。"""
     from melog.metrics import Mean, MetricGroup
@@ -621,3 +668,4 @@ def test_global_reinit_switches_active_instance(tmp_path):
     finally:
         second.close()  # 收尾活动实例
         first.close()
+

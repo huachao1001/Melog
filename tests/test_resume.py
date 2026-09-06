@@ -57,7 +57,7 @@ def test_resume_restores_history(tmp_path):
     assert m2.run_dir == m1.run_dir
     snap = m2.store.snapshot()["loss"]  # 历史回灌到面板
     assert [p["step"] for p in snap] == [0, 1, 2, 3, 4, 5]
-    assert m2._axis.step == 6 and m2._axis.bases == {0: 0, 1: 3}
+    assert m2._axis.section().step == 6 and m2._axis.section().bases == {0: 0, 1: 3}
     train_epochs(m2, [2], start=2)  # 从 epoch 2 继续训练
     m2.close()
     assert [(s, e) for s, e, _ in read_records(tmp_path / "exp")] == [
@@ -143,6 +143,37 @@ def test_resume_truncation_updates_store(tmp_path):
     # 旧 epoch1 的 5 步残留被清除，重训 2 步从 x=3 接续，无 x 轴回退的点
     assert [p["step"] for p in snap] == [0, 1, 2, 3, 4]
     m2.close()
+
+
+def test_resume_tab_sequences_isolated_truncation(tmp_path):
+    """分区序列续训截断：只清本分区重叠区，其他分区的记录不受影响。"""
+    from melog.metrics import Mean, MetricGroup
+
+    m1 = make(tmp_path)
+    train = MetricGroup({"loss": Mean()})
+    for e in range(2):
+        for i in StepsBar(range(3), epoch=e, tab="train", metrics=train, reduce=False):
+            train.feed(loss=float(e * 3 + i))  # train 序列：e0 x0..2，e1 x3..5
+        for _ in range(4):
+            m1.scalar({"loss": 9.0}, tab="val")  # val 序列独立计数：x0..7
+    m1.close()
+    assert [(s, e2) for s, e2, _ in read_records(tmp_path / "exp")] == [
+        (0, 0), (1, 0), (2, 0),
+        (0, None), (1, None), (2, None), (3, None),
+        (3, 1), (4, 1), (5, 1),
+        (4, None), (5, None), (6, None), (7, None),
+    ]
+
+    m2 = make(tmp_path)
+    for i in StepsBar(range(2), epoch=1, tab="train", metrics=train, reduce=False):
+        train.feed(loss=8.0)  # 绑定 (train, 1)：train 重叠区截断，val 记录保留
+    m2.close()
+    assert [(s, e2) for s, e2, _ in read_records(tmp_path / "exp")] == [
+        (0, 0), (1, 0), (2, 0),
+        (0, None), (1, None), (2, None), (3, None),
+        (4, None), (5, None), (6, None), (7, None),  # val 序列 x >= cut 不受 train 截断影响
+        (3, 1), (4, 1),  # train epoch1 重训，从基准 x=3 接续
+    ]
 
 
 def test_resume_restores_media_and_colors(tmp_path):

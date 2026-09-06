@@ -4,9 +4,11 @@
  * 同组指标合并为一张多系列卡片（多分类逐类曲线一图对比），legend 显示
  * 去掉分组前缀后的系列名；无 '/' 的指标保持单系列卡片，外观与旧版一致。
  *
- * 大类别分区（train/val/test）：后端显式声明类别集合，指标名首段命中
- * 类别时归入该分区的垂直分块（分区内仍按上述规则分卡），未命中走
- * 原有分组——类别靠显式声明识别，不靠命名猜测。
+ * 分区（tab，train/val/test）：后端显式声明分区集合，指标名首段命中
+ * 分区时归入该分区（分区内仍按上述规则分卡），未命中走原有分组——
+ * 分区靠显式声明识别，不靠命名猜测。左侧切换栏按分区切换显隐：
+ * 只显示选中分区的分块，未分区图表始终可见；新建分区块同样按选中
+ * 分区决定显隐（history / 增量建卡行为一致）。
  *
  * 配色按名称 hash（FNV-1a）从调色板选取：同一指标名恒定同色（刷新/
  * 重建后不变），不同卡片/系列颜色错开；组内碰撞时向后顺延避免同卡撞色。
@@ -20,37 +22,61 @@ const fmt3 = (v) => {
 };
 
 export class ChartManager {
-  constructor({ palette, maxPoints, themeProvider }) {
+  constructor({ palette, maxPoints, themeProvider, onTabsChange = null }) {
     this.palette = palette;
     this.themeProvider = themeProvider;  // () => { axis, split } 当前主题坐标轴配色
     this.downsampler = new PointDownsampler(maxPoints);
     this.charts = {};   // 卡片键 -> echarts 实例
     this.data = {};     // 卡片键 -> { 完整指标名 -> [{step, value}] }
     this.colors = {};   // 指标名 -> 用户指定颜色（覆盖 hash 自动配色）
-    this.categories = new Set();  // 大类别（train/val/test）：命中首段前缀的指标归入分区
+    this.tabs = new Set();  // 分区 tab（train/val/test，声明顺序）：命中首段前缀的指标归入分区
     this.sections = {}; // 卡片键 -> 所属分区名（重建时恢复分区归属）
+    this.activeTab = 'all';  // 左侧切换栏选中的分区（'all' 显示全部）
+    this.onTabsChange = onTabsChange;  // (tabs: string[]) 分区集合变化时通知（左侧切换栏重建）
     window.addEventListener('resize', () => this.resizeAll());
   }
 
-  /** 处理 WebSocket 消息：history 全量替换 / update 增量追加 / colors 用户配色 / categories 大类别。 */
+  /** 处理 WebSocket 消息：history 全量替换 / update 增量追加 / colors 用户配色 / tabs 分区。 */
   handle(msg) {
     if (msg.type === 'history') {
-      if (Array.isArray(msg.categories)) this.#setCategories(msg.categories);
+      if (Array.isArray(msg.tabs)) this.#setTabs(msg.tabs);
       for (const [name, pts] of Object.entries(msg.metrics)) this.upsert(name, pts);
     } else if (msg.type === 'update') {
       for (const [name, value] of Object.entries(msg.metrics)) this.append(name, msg.step, value, msg.epoch);
-    } else if (msg.type === 'categories') {
-      if (Array.isArray(msg.categories)) this.#setCategories(msg.categories);
+    } else if (msg.type === 'tabs') {
+      if (Array.isArray(msg.tabs)) this.#setTabs(msg.tabs);
     } else if (msg.type === 'colors') {
       this.setColors(msg.colors);
     }
   }
 
-  /** 更新大类别集合；集合变化会改变指标名到分区的归属，已建卡片按新归属重建。 */
-  #setCategories(list) {
-    const before = this.categories.size;
-    for (const c of list) this.categories.add(c);
-    if (this.categories.size !== before) this.regroupAll();
+  /** 更新分区集合；集合变化会改变指标名到分区的归属，已建卡片按新归属重建，
+   *  并通知左侧切换栏（onTabsChange）按新分区集合重建按钮。
+   *  分区按声明顺序排列（服务端按记录顺序推送）：切换栏顺序与默认选中
+   *  （第一个 tab）都依赖它，不排序。 */
+  #setTabs(list) {
+    const before = this.tabs.size;
+    for (const t of list) this.tabs.add(t);
+    if (this.tabs.size !== before) {
+      this.regroupAll();
+      if (this.onTabsChange) this.onTabsChange([...this.tabs]);
+    }
+  }
+
+  /** 选中左侧切换栏的分区：只显示命中分区的分块（未分区图表始终可见）。
+   *  隐藏的图表尺寸归零，显隐后需重算尺寸。 */
+  setActiveTab(tab) {
+    this.activeTab = tab;
+    this.#applyTab();
+  }
+
+  /** 把当前选中分区应用到 DOM：分区块按归属显隐。 */
+  #applyTab() {
+    const tab = this.activeTab;
+    for (const block of document.querySelectorAll('#charts .tab-block')) {
+      block.classList.toggle('tab-off', tab !== 'all' && block.dataset.tab !== tab);
+    }
+    this.resizeAll();
   }
 
   /** 应用用户指定颜色（增量合并），已建卡片立即重新着色。 */
@@ -73,15 +99,15 @@ export class ChartManager {
 
   /** 指标名 -> { 卡片键, 分区名 }。
    *
-   * 首段命中大类别（train/val/test）时归入该分区的垂直分块：卡片键 =
-   * "类别/指标前缀"（分区隔离同名卡片），分区名用于建分区容器；
+   * 首段命中分区 tab（train/val/test）时归入该分区的垂直分块：卡片键 =
+   * "tab/指标前缀"（分区隔离同名卡片），分区名用于建分区容器；
    * 未命中保持原行为（按最后一个 '/' 前缀分组，无分区）。
    */
   #layoutOf(name) {
     const i = name.indexOf('/');
     if (i > 0) {
       const section = name.slice(0, i);
-      if (this.categories.has(section)) {
+      if (this.tabs.has(section)) {
         const rest = name.slice(i + 1);
         return { card: `${section}/${this.#groupOf(rest)}`, section };
       }
@@ -89,17 +115,17 @@ export class ChartManager {
     return { card: this.#groupOf(name), section: null };
   }
 
-  /** 系列显示名：分区指标去掉类别前缀后，再去掉卡片分组前缀。 */
+  /** 系列显示名：分区指标去掉 tab 前缀后，再去掉卡片分组前缀。 */
   #seriesLabel(name) {
     const i = name.indexOf('/');
-    if (i > 0 && this.categories.has(name.slice(0, i))) {
+    if (i > 0 && this.tabs.has(name.slice(0, i))) {
       const rest = name.slice(i + 1);
       return this.#labelOf(rest);
     }
     return this.#labelOf(name);
   }
 
-  /** 大类别集合变化后，把已建卡片按新归属重排（清 DOM 重建，保留数据与缩放）。 */
+  /** 分区集合变化后，把已建卡片按新归属重排（清 DOM 重建，保留数据与缩放）。 */
   regroupAll() {
     this.sections = {};
     const zooms = {};
@@ -109,19 +135,20 @@ export class ChartManager {
       ch.dispose();
       delete this.charts[group];
     }
-    document.querySelectorAll('#charts .card, #charts .cat').forEach((el) => el.remove());
+    document.querySelectorAll('#charts .card, #charts .tab-block').forEach((el) => el.remove());
     for (const group of Object.keys(this.data)) {
       const section = this.#sectionOfCard(group);
       this.ensureChart(group, section);
       this.#syncSeries(group);
       if (zooms[group]) this.charts[group].dispatchAction({ type: 'dataZoom', start: zooms[group].start, end: zooms[group].end });
     }
+    this.#applyTab();  // 重建后按选中分区恢复显隐
   }
 
-  /** 由卡片键反推分区名（键为 "类别/指标前缀" 且首段是已知类别时命中）。 */
+  /** 由卡片键反推分区名（键为 "tab/指标前缀" 且首段是已知分区时命中）。 */
   #sectionOfCard(card) {
     const i = card.indexOf('/');
-    return i > 0 && this.categories.has(card.slice(0, i)) ? card.slice(0, i) : null;
+    return i > 0 && this.tabs.has(card.slice(0, i)) ? card.slice(0, i) : null;
   }
 
   /** FNV-1a 字符串 hash（32 位无符号），用于按名称稳定选色。
@@ -155,16 +182,18 @@ export class ChartManager {
     document.getElementById('empty')?.remove();
     let parent = document.getElementById('charts');
     if (section) {
-      // 大类别分区：标题 + 独立网格，垂直分块；卡片进分区内的网格
-      let block = document.querySelector(`#charts .cat[data-cat="${CSS.escape(section)}"]`);
+      // 分区分块：标题 + 独立网格；新建时按当前选中 tab 决定显隐
+      // （history / 增量建卡都走这里，默认选中在建卡前应用也不漏）
+      let block = document.querySelector(`#charts .tab-block[data-tab="${CSS.escape(section)}"]`);
       if (!block) {
         block = document.createElement('div');
-        block.className = 'cat';
-        block.dataset.cat = section;
-        block.innerHTML = `<h2>${section}</h2><div class="cat-grid"></div>`;
+        block.className = 'tab-block';
+        block.dataset.tab = section;
+        block.innerHTML = `<h2>${section}</h2><div class="tab-grid"></div>`;
         parent.appendChild(block);
+        block.classList.toggle('tab-off', this.activeTab !== 'all' && this.activeTab !== section);
       }
-      parent = block.querySelector('.cat-grid');
+      parent = block.querySelector('.tab-grid');
     }
     this.sections[group] = section;
     const card = document.createElement('div');
@@ -305,12 +334,13 @@ export class ChartManager {
       delete this.charts[group];
     }
     // 连同旧卡片 / 分区 DOM 一起移除，避免重复建卡
-    document.querySelectorAll('#charts .card, #charts .cat').forEach((el) => el.remove());
+    document.querySelectorAll('#charts .card, #charts .tab-block').forEach((el) => el.remove());
     for (const group of Object.keys(this.data)) {
       this.ensureChart(group, this.sections[group] ?? this.#sectionOfCard(group));
       this.#syncSeries(group);
       if (zooms[group]) this.charts[group].dispatchAction({ type: 'dataZoom', start: zooms[group].start, end: zooms[group].end });
     }
+    this.#applyTab();  // 重建后按选中分区恢复显隐
   }
 
   resizeAll() {

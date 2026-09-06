@@ -19,8 +19,10 @@ class MetricView:
         self._loaded: Optional[Dict[str, List[Point]]] = None
         self._colors: Dict[str, str] = {}  # 实时指标的用户指定颜色
         self._loaded_colors: Optional[Dict[str, str]] = None  # 历史日志自带的颜色
-        self._categories: set = set()  # 实时 run 的大类别（train/val/test）
-        self._loaded_categories: Optional[set] = None  # 历史日志自带的大类别
+        # 实时 run 的分区 tab（train/val/test）：dict 兼作有序去重集合（键集合），
+        # 顺序 = 声明顺序（左侧切换栏与默认选中 tab 依赖它）
+        self._tabs: Dict[str, None] = {}
+        self._loaded_tabs: Optional[Dict[str, None]] = None  # 历史日志自带的分区 tab
 
     @property
     def max_points(self) -> int:
@@ -30,20 +32,21 @@ class MetricView:
     def has_loaded(self) -> bool:
         return self._loaded is not None
 
-    def add_categories(self, categories) -> None:
-        """登记实时 run 的大类别（去重）。"""
-        self._categories.update(categories)
+    def add_tabs(self, tabs) -> None:
+        """登记实时 run 的分区 tab（按声明顺序去重）。"""
+        for t in tabs:
+            self._tabs.setdefault(t)
 
-    def set_categories(self, categories) -> None:
-        """整体替换实时 run 的大类别集合（历史恢复时用）。"""
-        self._categories = set(categories)
+    def set_tabs(self, tabs) -> None:
+        """整体替换实时 run 的分区 tab（历史恢复时用，保留给定顺序）。"""
+        self._tabs = {t: None for t in tabs}
 
     @property
-    def categories(self) -> set:
-        """当前视图的大类别集合（历史日志视图优先）。"""
+    def tabs(self) -> List[str]:
+        """当前视图的分区 tab（历史日志视图优先；按声明顺序排列）。"""
         if self._loaded is not None:
-            return self._loaded_categories or set()
-        return set(self._categories)
+            return list(self._loaded_tabs or {})
+        return list(self._tabs)
 
     def set_colors(self, colors: Dict[str, str]) -> None:
         """设置实时运行的用户指定颜色（指标名 -> CSS 颜色）。"""
@@ -57,17 +60,17 @@ class MetricView:
         return self._colors
 
     def set_loaded(self, series: Dict[str, List[Point]], colors: Optional[Dict[str, str]] = None,
-                   categories: Optional[set] = None) -> None:
-        """切换到历史日志视图，可附带该日志的颜色配置与大类别。"""
+                   tabs: Optional[List[str]] = None) -> None:
+        """切换到历史日志视图，可附带该日志的颜色配置与分区 tab（保留给定顺序）。"""
         self._loaded = series
         self._loaded_colors = dict(colors or {})
-        self._loaded_categories = set(categories or set())
+        self._loaded_tabs = {t: None for t in tabs or []}
 
     def clear_loaded(self) -> None:
         """切回实时视图。"""
         self._loaded = None
         self._loaded_colors = None
-        self._loaded_categories = None
+        self._loaded_tabs = None
 
     def snapshot(self) -> Dict[str, List[Dict]]:
         """当前视图的展示快照（均降采样）；epoch 仅在启用时输出。"""

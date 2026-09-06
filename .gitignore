@@ -22,3 +22,5 @@ melog_runs/
 .vscode/
 
 .codegraph/
+
+outputs/

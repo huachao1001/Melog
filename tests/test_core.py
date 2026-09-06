@@ -296,6 +296,87 @@ def test_stepsbar_auto_log_each_epoch(lg):
     assert [r["value"] for r in snap if r["epoch"] == 1] == [1.0, 1.5, 2.0, 2.0]
 
 
+def test_stepsbar_tab_partitions_records(lg):
+    """StepsBar(tab=...)：实时与 epoch 末记录都加分区前缀，postfix 保持注册名。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"loss": Mean()})
+    bar = StepsBar(range(3), epoch=0, tab="train", metrics=group)
+    for i in bar:
+        group.feed(loss=float(i + 1))
+    nan = group.local()["loss"]  # 已重置 -> NaN
+    assert nan != nan
+    # postfix 数据始终为注册名（分区前缀只用于落盘记录）
+    assert set(bar.postfix) == {"loss"}
+    snap = lg.store.snapshot()["train/loss"]  # 分区前缀的记录键
+    # epoch 内 3 次本地运行值 + epoch 末全局合并值
+    assert [r["value"] for r in snap] == [1.0, 1.5, 2.0, 2.0]
+    assert lg.store.snapshot().get("loss") is None  # 不存在无前缀的键
+
+
+def test_stepsbar_tab_step_sequences_isolated(lg):
+    """分区序列 step 隔离：train 与 val 各自独立计数，互不推进对方步数。"""
+    from melog.metrics import Mean, MetricGroup
+
+    train = MetricGroup({"loss": Mean()})
+    for i in StepsBar(range(3), epoch=0, tab="train", metrics=train, reduce=False):
+        train.feed(loss=float(i))  # train 序列 x = 0,1,2（运行均值 0, 0.5, 1）
+    lg.scalar({"loss": 9.0}, tab="val")  # val 序列 x = 0（不接续 train）
+    lg.scalar({"loss": 8.0}, tab="val")  # val 序列 x = 1
+    snap = lg.store.snapshot()
+    assert [(r["step"], r["value"]) for r in snap["train/loss"]] == \
+        [(0, 0.0), (1, 0.5), (2, 1.0)]
+    assert [(r["step"], r["value"]) for r in snap["val/loss"]] == [(0, 9.0), (1, 8.0)]
+
+
+def test_stepsbar_scalar_without_tab_follows_bar_tab(lg):
+    """StepsBar 声明了 tab：bar 内不带 tab 的 scalar 记录归入该分区序列。"""
+    for i in StepsBar(range(2), epoch=0, tab="train"):
+        lg.scalar({"loss": float(i)})
+    snap = lg.store.snapshot()
+    assert [(r["step"], r["value"]) for r in snap["train/loss"]] == [(0, 0.0), (1, 1.0)]
+    assert snap.get("loss") is None  # 不落无前缀键
+
+
+def test_stepsbar_reduce_off_master_only(lg):
+    """reduce=False（训练只看 master 实时值）：epoch 末不做跨卡合并落盘。"""
+    from melog.metrics import Mean, MetricGroup
+
+    group = MetricGroup({"loss": Mean()})
+    for i in StepsBar(range(3), epoch=0, tab="train", metrics=group, reduce=False):
+        group.feed(loss=float(i + 1))
+    snap = lg.store.snapshot()["train/loss"]
+    # 仅 epoch 内 3 条本卡实时值（运行均值），无 epoch 末合并记录
+    assert [r["value"] for r in snap] == [1.0, 1.5, 2.0]
+
+
+def test_stepsbar_reduce_off_rejects_on_end(lg):
+    """on_end 回调参数为跨卡合并结果：reduce=False 时 epoch 末无合并记录，拒绝组合。"""
+    from melog.metrics import Mean, MetricGroup
+
+    with pytest.raises(ValueError, match="reduce"):
+        StepsBar(range(3), metrics=MetricGroup({"m": Mean()}), reduce=False,
+                 on_end=lambda result: None)
+
+
+def test_stepsbar_reduce_off_scoped_to_bar(lg):
+    """reduce=False 只作用于本 bar：嵌套 reduce=True 的 val bar 内照常合并落盘。"""
+    from melog.metrics import Mean, MetricGroup
+
+    train = MetricGroup({"loss": Mean()})
+    val = MetricGroup({"loss": Mean()})
+    outer = StepsBar(range(2), epoch=0, tab="train", metrics=train, reduce=False)
+    for i, _ in enumerate(outer):
+        train.feed(loss=1.0)
+        if i == 0:  # 内嵌 val bar 只跑一轮（外层共 2 步，演示嵌套即可）
+            for j in StepsBar(range(2), epoch=0, tab="val", metrics=val):
+                val.feed(loss=float(j))
+    snap = lg.store.snapshot()
+    assert [r["value"] for r in snap["train/loss"]] == [1.0, 1.0]  # 无 epoch 末记录
+    # val：2 条实时值（运行均值）+ epoch 末跨卡合并值（mean(0, 1) = 0.5）
+    assert [r["value"] for r in snap["val/loss"]] == [0.0, 0.5, 0.5]
+
+
 def test_stepsbar_no_auto_log_on_break(lg):
     """提前 break：不触发 epoch 末全局记录（各 rank 迭代进度可能不一致）。"""
     from melog.metrics import Mean, MetricGroup

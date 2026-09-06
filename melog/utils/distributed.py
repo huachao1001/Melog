@@ -12,6 +12,7 @@ __all__ = [
     "is_distributed",
     "get_rank",
     "get_world_size",
+    "local_metrics",
     "reduce_metrics",
     "gather_object",
 ]
@@ -58,6 +59,27 @@ def _to_tensor(value: Any):
     return torch.tensor(float(value), device=device, dtype=torch.float64)
 
 
+def local_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
+    """本地指标 float 化（零通信；不做跨进程合并）。
+
+    reduce=False 的场景（如训练期间只看 master 实时值）由 scalar 调用，
+    跳过 all_reduce、只规整本卡值。单进程时 reduce_metrics 也走本实现
+    （直通，避免不必要的拷贝）。
+
+    Args:
+        metrics: 指标字典，值为数值或 0 维 tensor。
+    """
+    out = {}
+    for k, v in metrics.items():
+        if _TORCH_OK and torch.is_tensor(v):
+            out[k] = float(v.item())
+        elif _is_number(v):
+            out[k] = float(v)
+        else:
+            raise TypeError(f"指标值须为数值类型，收到 {type(v).__name__}")
+    return out
+
+
 def reduce_metrics(metrics: Dict[str, Any], op: str = "mean") -> Dict[str, float]:
     """合并所有进程的指标。
 
@@ -69,15 +91,7 @@ def reduce_metrics(metrics: Dict[str, Any], op: str = "mean") -> Dict[str, float
         return {}
     if not is_distributed():
         # 单进程直通，避免不必要的拷贝
-        out = {}
-        for k, v in metrics.items():
-            if _TORCH_OK and torch.is_tensor(v):
-                out[k] = float(v.item())
-            elif _is_number(v):
-                out[k] = float(v)
-            else:
-                raise TypeError(f"指标值须为数值类型，收到 {type(v).__name__}")
-        return out
+        return local_metrics(metrics)
 
     tensors = {k: _to_tensor(v) for k, v in metrics.items()}
     world_size = dist.get_world_size()

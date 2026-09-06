@@ -40,6 +40,8 @@ import zlib
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple, Union
 
+from ..tracking.axis import row_section
+
 __all__ = ["MelogFile", "MelogFileReader"]
 
 _PATH = Union[str, Path]
@@ -174,18 +176,25 @@ class MelogFile:
         """写入一批指标记录（Journal.flush 的暂存记录，按 step 归并成行）。"""
         if not records:
             return
-        rows: List[Row] = []
+        rows: List[List] = []  # [step, epoch, {指标名: 值}, 首段名]（首段防跨分区归并）
         for rec in records:
             step, epoch = rec["step"], rec.get("epoch")
-            if rows and rows[-1][0] == step and rows[-1][1] == epoch:
-                rows[-1][2][rec["metric"]] = float(rec["value"])
+            name = rec["metric"]
+            seg = name.split("/", 1)[0] if "/" in name else ""
+            # 同一提交的记录 (step, epoch) 相同才归并成行；分区序列不同
+            # 时 x 独立计数可能碰巧相同（如 train 与 val 都在 x=0），名字
+            # 首段不同就不归并，避免一行混进两个分区的记录
+            if rows and rows[-1][0] == step and rows[-1][1] == epoch \
+                    and rows[-1][3] == seg:
+                rows[-1][2][name] = float(rec["value"])
             else:
-                rows.append((step, epoch, {rec["metric"]: float(rec["value"])}))
+                rows.append([step, epoch, {name: float(rec["value"])}, seg])
         for row in rows:  # 新指标名先写符号表项（读取按顺序建表）
             for name in row[2]:
                 if name not in self._names:
                     self._define(name)
-        self._write_block(self.TYPE_METRIC, _encode_rows(rows, self._names, self._prev_step))
+        self._write_block(self.TYPE_METRIC, _encode_rows(
+            [(r[0], r[1], r[2]) for r in rows], self._names, self._prev_step))
         self._prev_step = rows[-1][0]
 
     def append_media(self, record: Dict) -> None:
@@ -200,14 +209,15 @@ class MelogFile:
         if not self._file.closed:
             self._file.close()
 
-    def truncate_from(self, cut_step: int) -> Tuple[Optional[int], Optional[int]]:
-        """物理截断本文件尾部 step >= cut_step 的记录（续训清除重叠区）。
+    def truncate_from(self, cut_step: int, section: Optional[str] = None,
+                      tabs: "tuple[str, ...]" = ()) -> Tuple[Optional[int], Optional[int]]:
+        """物理截断本文件尾部该分区 step >= cut_step 的记录（续训清除重叠区）。
 
         返回截断后最后一条保留记录的 (step, epoch)；无保留记录时返回
         (None, None)。调用方需保证此前已 flush（无未落盘记录）。
         """
         self._file.close()
-        result = MelogFile.truncate(self._path, cut_step)
+        result = MelogFile.truncate(self._path, cut_step, section=section, tabs=tabs)
         self._file = self._open()  # 重开并重扫符号表 / 增量基准
         return result
 
@@ -272,12 +282,16 @@ class MelogFile:
 
     # ------------------------------------------------------------ 截断
     @staticmethod
-    def truncate(path: _PATH, cut_step: int) -> Tuple[Optional[int], Optional[int]]:
-        """截断指定日志文件中 step >= cut_step 的所有记录（含媒体记录）。
+    def truncate(path: _PATH, cut_step: int, section: Optional[str] = None,
+                 tabs: "tuple[str, ...]" = ()) -> Tuple[Optional[int], Optional[int]]:
+        """截断指定日志文件中该分区序列 step >= cut_step 的所有记录（含媒体）。
 
-        截断边界可能落在 block 中间：受影响 block 里 step < cut 的记录
-        重编码后原位保留，其后的内容全部丢弃。返回截断后最后一条保留
-        记录的 (step, epoch)；无保留记录时返回 (None, None)。
+        截断按分区序列进行（section 为 None 时截默认序列，即名字不命中
+        任何已声明 tab 前缀的记录）：其他分区序列的记录 step 独立计数、
+        与 cut 无关，一律原位保留。截断边界可能落在 block 中间：受影响
+        block 里该分区 step < cut 的记录重编码后原位保留，其后的内容中
+        其他分区记录照常保留。返回截断后最后一条保留记录的 (step, epoch)；
+        无保留记录时返回 (None, None)。
         """
         p = Path(path)
         if not p.exists() or p.stat().st_size <= len(MelogFile.MAGIC):
@@ -292,7 +306,7 @@ class MelogFile:
                 blocks.append((base, btype, flags, payload))
                 base = f.tell()
 
-            # 找到第一个含 step >= cut 记录的 block；同时维护符号表
+            # 找到第一个含该分区 step >= cut 记录的 block；同时维护符号表
             id2name: Dict[int, str] = {}
             cut_at = None
             last_kept: Optional[Row] = None
@@ -308,7 +322,7 @@ class MelogFile:
                     except KeyError:
                         break  # 符号表缺失 = 文件损坏，按已解析部分处理
                     for row in rows:
-                        if row[0] >= cut_step:
+                        if row_section(row[2], tabs) == section and row[0] >= cut_step:
                             cut_at = i
                             break
                         last_kept = row
@@ -319,8 +333,9 @@ class MelogFile:
                 return (last_kept[0], last_kept[1]) if last_kept else (None, None)
             base_count = len(id2name)  # 截断点前已有的符号表项数
 
-            # 受影响区域：过滤保留记录；媒体按 step 判断去留；区域内新
-            # 出现的指标名补写符号表项（其原定义在被丢弃区域内）
+            # 受影响区域：该分区过滤保留记录，其他分区记录照常保留；媒体
+            # 按 (分区, step) 判断去留；区域内新出现的指标名补写符号表项
+            # （其原定义在被丢弃区域内）
             name2id = {n: i for i, n in id2name.items()}
             keep_rows: List[Row] = []
             keep_media: List[bytes] = []
@@ -330,8 +345,13 @@ class MelogFile:
                     if rec is None:
                         continue
                     step = rec.get("step")
-                    # 无 step 的记录（如大类别声明）不参与按步截断，一律保留
-                    if step is None or step < cut_step:
+                    # 无 step 的记录（如分区声明）不参与按步截断，一律保留；
+                    # 媒体记录携带所属分区（rec["tab"]，历史记录缺省视为
+                    # 默认序列），按 (分区, step) 判断去留
+                    sec = rec.get("tab")
+                    if not isinstance(sec, str):
+                        sec = None
+                    if step is None or step < cut_step or sec != section:
                         keep_media.append(_block_bytes(btype, flags, payload))
                 elif btype == MelogFile.TYPE_NAME:
                     nid, pos = _get_varint(payload, 0)
@@ -345,7 +365,7 @@ class MelogFile:
                     except KeyError:
                         break  # 符号表缺失 = 文件损坏，按已解析部分处理
                     for row in rows:
-                        if row[0] < cut_step:
+                        if row_section(row[2], tabs) != section or row[0] < cut_step:
                             keep_rows.append(row)
 
             # 原位重写：区域内新增符号表项 + 保留媒体 + 保留指标
@@ -360,7 +380,9 @@ class MelogFile:
             for raw in keep_media:
                 f.write(raw)
             prev = last_kept[0] if last_kept else 0
-            f.write(_encode_rows(keep_rows, name2id, prev))
+            if keep_rows:  # 分区语义下区域里可保留其他分区记录（全局 x 语义下恒为空）
+                f.write(_block_bytes(
+                    MelogFile.TYPE_METRIC, 0, _encode_rows(keep_rows, name2id, prev)))
             f.flush()
 
         if keep_rows:

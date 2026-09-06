@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Melog 指标监控</title>
 <script src="/static/echarts.min.js?v=2"></script>
-<link rel="stylesheet" href="/static/css/style.css?v=5">
+<link rel="stylesheet" href="/static/css/style.css?v=6">
 <link rel="icon" href="/static/logo.svg">
 </head>
 <body>
@@ -33,9 +33,15 @@
     </svg>
   </button>
 </header>
-<div id="charts"><div id="empty">等待训练指标…</div></div>
-<div id="images" class="media-grid hidden"></div>
-<div id="audios" class="media-grid hidden"></div>
+<div id="layout">
+  <!-- 左侧分区切换栏：train / val / test 等 tab（分区数 < 2 时隐藏） -->
+  <aside id="tabs" class="hidden" aria-label="分区切换"></aside>
+  <main>
+    <div id="charts"><div id="empty">等待训练指标…</div></div>
+    <div id="images" class="media-grid hidden"></div>
+    <div id="audios" class="media-grid hidden"></div>
+  </main>
+</div>
 
 <!-- 文件浏览器弹窗 -->
 <div id="fbModal" class="hidden">
@@ -67,6 +73,6 @@
   </div>
 </div>
 
-<script type="module" src="/static/js/main.js?v=10"></script>
+<script type="module" src="/static/js/main.js?v=11"></script>
 </body>
 </html>

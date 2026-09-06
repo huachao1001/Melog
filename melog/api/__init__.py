@@ -58,19 +58,23 @@ def stepsbar(
     iterable: Iterable,
     total: Optional[float] = None,
     epoch: Optional[int] = None,
+    tab: Optional[str] = None,
     metrics: Optional[MetricGroup] = None,
+    reduce: bool = True,
     **kwargs: Any,
 ) -> StepsBar:
     """模块级便捷接口：等价于 ``StepsBar(iterable, ...)``。"""
-    return StepsBar(iterable, total=total, epoch=epoch, metrics=metrics, **kwargs)
+    return StepsBar(iterable, total=total, epoch=epoch, tab=tab,
+                    metrics=metrics, reduce=reduce, **kwargs)
 
 
 def scalar(
     metrics: Union[Dict[str, Any], MetricGroup],
     advance: int = 0,
+    tab: Optional[str] = None,
 ) -> Dict[str, float]:
     """模块级便捷接口：等价于 ``current().scalar(...)``。"""
-    return current().scalar(metrics, advance=advance)
+    return current().scalar(metrics, advance=advance, tab=tab)
 
 
 def log(*values: Any, sep: str = " ", end: str = "\n", flush: bool = False,

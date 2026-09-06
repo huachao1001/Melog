@@ -36,15 +36,26 @@ class MediaLog:
 
     def _log(self, kind: str, name: str, data: Any, save: Callable,
              sr: Optional[int] = None, caption: Optional[str] = None) -> None:
-        """单条媒体记录公共流程；文件名以全局 x 编号（000000000.png）。"""
+        """单条媒体记录公共流程；文件名以附着位置的全局 x 编号（000000000.png）。
+
+        各分区序列的 x 独立计数可能重复（train 与 val 都有 x=0）：同名
+        媒体编号碰撞时顺延 stem，避免互相覆盖。记录携带所属分区
+        （rec["tab"]，附着位置所在序列），供续训截断按分区判断去留。
+        """
         host = self._host
         if not host._is_primary:
             return
         safe = sanitize_name(name)
         with host._lock:
-            x, e = host._axis.resolve_attach()
-            rel = f"media/{kind}/{safe}/{save(host._run_dir / 'media' / kind / safe, f'{int(x):09d}')}"
+            x, e, sec = host._axis.resolve_attach()
+            out_dir = host._run_dir / "media" / kind / safe
+            stem = f"{int(x):09d}"
+            while any(out_dir.glob(f"{stem}.*")):  # 同名媒体编号碰撞：顺延
+                stem = f"{int(stem) + 1:09d}"
+            rel = f"media/{kind}/{safe}/{save(out_dir, stem)}"
             record: Dict[str, Any] = {"type": kind, "metric": name, "step": int(x), "file": rel}
+            if sec is not None:
+                record["tab"] = sec
             if e is not None:
                 record["epoch"] = e
             if sr is not None:

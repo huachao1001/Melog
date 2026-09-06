@@ -386,15 +386,15 @@ def test_multi_rank_gloo(tmp_path):
     assert r0 == r1 == {"loss": pytest.approx(5.0 / 3.0), "total": pytest.approx(9.0)}
 
 
-def test_group_category_prefixes_record_names(tmp_path):
-    """MetricGroup(category=...)：记录名自动加类别前缀，local 同步带前缀。"""
+def test_scalar_tab_prefixes_record_names(tmp_path):
+    """scalar(tab=...)：记录名自动加分区前缀；local 保持注册名。"""
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
-    train = MetricGroup({"loss": Mean(), "recall/class_0": Mean()}, category="train")
-    val = MetricGroup({"loss": Mean()}, category="val")
+    train = MetricGroup({"loss": Mean(), "recall/class_0": Mean()})
+    val = MetricGroup({"loss": Mean()})
     train.feed(loss=1.0, **{"recall/class_0": 0.5})
-    lg.scalar(train)
+    lg.scalar(train, tab="train")
     val.feed(loss=2.0)
-    lg.scalar(val)
+    lg.scalar(val, tab="val")
     lg.close()
 
     from melog.storage.melog_file import MelogFileReader
@@ -403,16 +403,16 @@ def test_group_category_prefixes_record_names(tmp_path):
     records = list(MelogFileReader(path).records())
     assert records == [
         (0, None, {"train/loss": 1.0, "train/recall/class_0": 0.5}),
-        (1, None, {"val/loss": 2.0}),
+        (0, None, {"val/loss": 2.0}),  # 分区序列 step 独立计数：val 从 0 起，不接续 train
     ]
     assert set(train.local()) == {"loss", "recall/class_0"}  # 实时显示用注册名，不带前缀
-    # 类别声明随日志持久化
-    cats = [r for r in MelogFileReader(path).media() if r.get("type") == "category"]
+    # 分区声明随日志持久化（落盘记录名为 tab）
+    cats = [r for r in MelogFileReader(path).media() if r.get("type") == "tab"]
     assert {r["name"] for r in cats} == {"train", "val"}
 
 
-def test_group_without_category_unchanged(tmp_path):
-    """不传 category：行为与旧版完全一致（名字不加前缀）。"""
+def test_group_without_tab_unchanged(tmp_path):
+    """不传 tab：行为与不分区完全一致（名字不加前缀）。"""
     lg = Melog(project="t", output_dir=str(tmp_path), enable_web=False)
     group = MetricGroup({"loss": Mean()})
     group.feed(loss=1.0)
@@ -424,5 +424,5 @@ def test_group_without_category_unchanged(tmp_path):
     path = next((tmp_path / "t").glob("*metrics-*.melog"))
     records = list(MelogFileReader(path).records())
     assert records == [(0, None, {"loss": 1.0})]
-    cats = [r for r in MelogFileReader(path).media() if r.get("type") == "category"]
+    cats = [r for r in MelogFileReader(path).media() if r.get("type") == "tab"]
     assert cats == []

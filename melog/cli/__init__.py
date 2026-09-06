@@ -75,6 +75,9 @@ def main(argv=None) -> int:
         return 1
 
     server = WebServer(store, host=args.host, port=args.port, log_file=str(log_file))
+    tabs = LogLoader.tabs(log_file)  # 日志中声明的分区 tab（声明顺序）
+    if tabs:
+        server.view.add_tabs(tabs)  # 左侧切换栏据此重建（与面板加载历史日志一致）
     server.start()
 
     print(f"Melog 可视化: {server.url}")

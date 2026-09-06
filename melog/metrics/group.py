@@ -50,19 +50,16 @@ class MetricGroup:
     失败（如迭代 range）回退等权平均并警告一次。显式传 (值, 观测数)
     元组时以显式值优先。
 
-    category 大类别：传入 category（如 "train" / "val" / "test"）时，
-    同一套指标定义按大类别区分——记录的指标名自动加该前缀
-    （``f"{category}/{name}"``，如 train/loss），Web 面板把不同
-    category 的卡片分到独立分区垂直排列；分区内仍按指标名分卡
-    （"recall/class_0" 式逐类命名照常合并为多系列）。category 与
-    指标名的对应关系由框架显式记录（不靠命名识别），历史日志重新
-    加载时一并恢复。
+    面板分区（train / val / test 分块）不在本组指定：由 StepsBar 的
+    tab=... 参数声明，同一套指标定义可分别挂到不同 tab 的 bar 上；
+    未挂 bar 时手动 scalar(metrics, tab=...) 同样生效。指标名本身只
+    表达绘制归属：同一张卡片内绘制的多系列（"recall/class_0" 式逐类
+    命名）才用前缀命名，分区归属不进名字——进度条 postfix 显示的
+    始终是注册名。
     """
 
-    def __init__(self, metrics: Optional[Dict[str, Metric]] = None,
-                 category: Optional[str] = None):
+    def __init__(self, metrics: Optional[Dict[str, Metric]] = None):
         self._metrics: Dict[str, Metric] = dict(metrics or {})
-        self._category = category  # 大类别（train/val/test）：记录时自动加为指标名前缀
         # 每次 feed() 后触发的回调（由 StepsBar 挂载，用于进度条实时显示本地值）
         self._on_feed: Optional[Callable[[bool], None]] = None
         # StepsBar 每次迭代自动注入的当前批次样本数（None = 未知，等权）
@@ -145,35 +142,58 @@ class MetricGroup:
 
         等价于把本 rank 状态单方面合并：无观测的指标为 NaN；返回矩阵的
         指标（如 ConfusionMatrix）原样返回，调用方可按需过滤。键为用户
-        注册名，**不带 category 前缀**（前缀只用于落盘记录，见 _compute）。
+        注册名，**不带任何分区前缀**（tab 分区前缀由 StepsBar 记录时添加，
+        见 _compute；实时显示与 postfix 用注册名）。
         """
         return {name: m.merge_states([m.state()]) for name, m in self._metrics.items()}
 
-    def _compute(self) -> Dict[str, Any]:
+    def _compute(self, tab: Optional[str] = None) -> Dict[str, Any]:
         """同步合并组内全部指标并返回全局结果（内部方法，由 scalar 调用）。
 
         所有 rank 必须以相同顺序调用（一次 all_gather 完成全部同步），
-        返回值在各 rank 上一致，可直接交给 melog.scalar()。
+        返回值在各 rank 上一致，可直接交给 melog.scalar()。tab 为面板
+        分区名（StepsBar 的 tab=...）：仅作为记录键的前缀
+        （``f"{tab}/{name}"``，如 train/loss），供面板把不同分区垂直
+        排列；分区内仍按注册名分卡。
 
         结果规整（scalar 只收数值）：
         - compute 返回 dict 的指标（prepare 型多输出，如 precision/recall/f1）
           展平为 ``{name}/{k}``；
-        - 设置了 category 时键带 ``category/`` 前缀；
+        - 传 tab 时键带 ``{tab}/`` 前缀；
         - NaN / inf 与非数值结果（如 ConfusionMatrix 的矩阵）跳过不进记录。
         """
         names = list(self._metrics)
         states = gather_object([self._metrics[name].state() for name in names])
         out: Dict[str, Any] = {}
         for i, name in enumerate(names):
-            key = f"{self._category}/{name}" if self._category else name
+            key = f"{tab}/{name}" if tab else name
             v = self._metrics[name].merge_states([state[i] for state in states])
-            if isinstance(v, dict):
-                for k, kv in v.items():
-                    if _is_finite_number(kv):
-                        out[f"{key}/{k}"] = kv
-            elif _is_finite_number(v):
-                out[key] = v
+            self._flatten(out, key, v)
         return out
+
+    def _compute_local(self, tab: Optional[str] = None) -> Dict[str, Any]:
+        """本 rank 本地规整（零通信，内部方法）：只记本卡值时由 scalar 调用。
+
+        reduce=False 的 bar 打开中，scalar(metrics) 跳过跨 GPU 合并，
+        改走本实现：等价于各指标单方面合并自身状态（无观测为 NaN，按
+        规整规则跳过）。tab 语义与 _compute 相同（记录键前缀）。
+        """
+        out: Dict[str, Any] = {}
+        for name, metric in self._metrics.items():
+            key = f"{tab}/{name}" if tab else name
+            v = metric.merge_states([metric.state()])
+            self._flatten(out, key, v)
+        return out
+
+    @staticmethod
+    def _flatten(out: Dict[str, Any], key: str, v: Any) -> None:
+        """规整单指标结果进 out（scalar 只收数值；NaN / inf / 非数值跳过）。"""
+        if isinstance(v, dict):
+            for k, kv in v.items():
+                if _is_finite_number(kv):
+                    out[f"{key}/{k}"] = kv
+        elif _is_finite_number(v):
+            out[key] = v
 
     def reset(self) -> None:
         """重置组内全部指标，开启新一轮统计。"""

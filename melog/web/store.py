@@ -47,9 +47,26 @@ class MetricStore:
             drained, self._pending = self._pending, []
             return drained
 
-    def truncate(self, cut_step: int) -> None:
-        """丢弃 step >= cut_step 的历史与未落盘记录（续训清除重叠区）。"""
+    def truncate(self, cut_step: int, section: Optional[str] = None,
+                 tab_prefixes: "tuple[str, ...]" = ()) -> None:
+        """丢弃 step >= cut_step 的历史与未落盘记录（续训清除重叠区）。
+
+        截断按分区序列进行：section 给定时只截该分区（名字命中
+        f"{section}/" 前缀）的指标；section 为 None 时截默认序列（名字
+        不命中任何已声明 tab 前缀）的指标，其余分区照常保留。
+        """
+        tabs = set(tab_prefixes)
+
+        def _own(name: str) -> bool:
+            i = name.find("/")
+            sec = name[:i] if i > 0 and name[:i] in tabs else None
+            return sec == section
+
         with self._lock:
             for name, points in self._data.items():
-                self._data[name] = [p for p in points if p[0] < cut_step]
-            self._pending = [r for r in self._pending if r["step"] < cut_step]
+                if _own(name):
+                    self._data[name] = [p for p in points if p[0] < cut_step]
+            self._pending = [
+                r for r in self._pending
+                if r["step"] < cut_step or not _own(r["metric"])
+            ]

@@ -50,10 +50,11 @@ class Journal:
         if records:
             self._file.add_batch(records)
 
-    def truncate_from(self, cut_step: int) -> Tuple[Optional[int], Optional[int]]:
-        """截断本会话文件中 step >= cut_step 的记录，返回最后保留记录的
+    def truncate_from(self, cut_step: int, section: Optional[str] = None,
+                      tabs: "tuple[str, ...]" = ()) -> Tuple[Optional[int], Optional[int]]:
+        """截断本会话文件中该分区 step >= cut_step 的记录，返回最后保留记录的
         (step, epoch)（续训清除重叠区用；调用方需先 flush）。"""
-        return self._file.truncate_from(cut_step)
+        return self._file.truncate_from(cut_step, section=section, tabs=tabs)
 
     def close(self) -> None:
         self._file.close()

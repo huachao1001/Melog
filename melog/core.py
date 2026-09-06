@@ -31,10 +31,10 @@ from .storage.journal import Journal
 from .storage.media_log import MediaLog
 from .storage.melog_file import MelogFile, MelogFileReader
 from .storage.mirror import Mirror
-from .tracking.axis import Axis
+from .tracking.axis import Axis, row_section
 from .tracking.console import Console
 from .utils.bar_stack import BarStack
-from .utils.distributed import get_rank, reduce_metrics
+from .utils.distributed import get_rank, local_metrics, reduce_metrics
 from .utils.tqdm import tqdm
 from .web.loader import LogLoader
 from .web.media_store import MediaStore
@@ -54,7 +54,7 @@ class Melog:
     """训练监控主入口（内部实现；公开入口为 melog.init()）。
 
     组合的组件（各司其职，详见各模块文档）：
-    - Axis      全局 x / epoch 坐标裁决
+    - Axis      各分区序列（tab）的全局 x / epoch 坐标裁决
     - BarStack  进度条栈（嵌套、恢复渲染）
     - Console   控制台消息 + 官方 print 拦截
     - Journal   metrics-<时间戳>.melog 二进制日志落盘（多会话加序号前缀）
@@ -107,7 +107,7 @@ class Melog:
         self._closed = False
         self._lock = threading.Lock()
         self._colors: Dict[str, str] = {}  # 用户指定的指标颜色（名称 -> CSS 颜色）
-        self._categories: set = set()  # 本 run 用过的大类别（train/val/test）
+        self._tabs: list = []  # 本 run 声明过的分区 tab（train/val/test），保持声明顺序
 
         self._run_dir = self._prepare_run_dir(output_dir)
         self._session_seq = self._next_session_number()
@@ -115,7 +115,11 @@ class Melog:
 
         self.store = MetricStore()
         self.media = MediaStore()
-        self._journal = Journal(self._log_file, self.store, flush_every=flush_every)
+        # 仅主卡（rank0）创建日志写入器：其他卡不创建、不写 metrics .melog
+        self._journal: Optional[Journal] = (
+            Journal(self._log_file, self.store, flush_every=flush_every)
+            if self._is_primary else None
+        )
         self._media_log = MediaLog(self)
         if self._is_primary:
             self._restore_history()  # 断点续训：回灌同目录历史日志
@@ -130,8 +134,8 @@ class Melog:
                 log_file=str(self._log_file),
             )
             self._web.start()
-            if self._categories:  # 历史日志恢复的大类别分区
-                self._web.set_categories(self._categories)
+            if self._tabs:  # 历史日志恢复的分区 tab
+                self._web.set_tabs(self._tabs)
             if self._colors:  # 历史日志自带配色时一并恢复
                 self._web.set_colors(dict(self._colors))
 
@@ -205,21 +209,23 @@ class Melog:
         """断点续训：回灌同 run 目录的历史日志（仅 rank0）。
 
         指标灌入内存 store（Web 面板立即显示完整曲线）、坐标轴状态
-        （step / 各 epoch 基准）从日志重建，媒体索引与用户配色一并
-        恢复。此后重新进入某个历史 epoch 时按其基准截断重叠区。
+        （各分区序列的 step / 各 epoch 基准）从日志重建，媒体索引与
+        用户配色一并恢复。此后重新进入某个历史 (分区, epoch) 时按其
+        基准截断重叠区。
+
+        先扫媒体记录恢复分区声明（指标记录行的分区归属靠它判断——
+        名字命中已声明 tab 前缀的归入该分区序列），再扫指标记录按
+        分区序列回灌坐标轴。
         """
-        for f in LogLoader.session_files(self._run_dir):
-            if f == self._log_file:
-                continue  # 跳过本次会话自己的（空）文件
+        files = [f for f in LogLoader.session_files(self._run_dir)
+                 if f != self._log_file]  # 跳过本次会话自己的（空）文件
+        for f in files:
             reader = MelogFileReader(f)
-            for step, epoch, values in reader.records():
-                self.store.add(step, values, epoch, persist=False)  # 已落盘，仅回灌展示
-                self._axis.absorb(step, epoch)
             for rec in reader.media():
                 kind = rec.get("type")
-                if kind == "category":  # 大类别声明记录
-                    if isinstance(rec.get("name"), str):
-                        self._categories.add(rec["name"])
+                if kind == "tab":  # 分区声明记录
+                    if isinstance(rec.get("name"), str) and rec["name"] not in self._tabs:
+                        self._tabs.append(rec["name"])  # 保持记录顺序（tab 顺序与默认选中依赖它）
                     continue
                 name, step = rec.get("metric"), rec.get("step")
                 if isinstance(kind, str) and isinstance(name, str) and isinstance(step, int):
@@ -227,6 +233,12 @@ class Melog:
                                    rec.get("epoch") if isinstance(rec.get("epoch"), int) else None,
                                    sr=rec.get("sr") if isinstance(rec.get("sr"), int) else None,
                                    caption=rec.get("caption") if isinstance(rec.get("caption"), str) else None)
+        tabs = set(self._tabs)
+        for f in files:
+            reader = MelogFileReader(f)
+            for step, epoch, values in reader.records():
+                self.store.add(step, values, epoch, persist=False)  # 已落盘，仅回灌展示
+                self._axis.absorb(step, epoch, row_section(values, tabs))
         try:  # 恢复上次运行的用户配色（如有）
             data = json.loads((self._run_dir / "colors.json").read_text(encoding="utf-8"))
             if isinstance(data, dict):
@@ -263,103 +275,125 @@ class Melog:
         self,
         metrics: Union[Dict[str, Union[float, int, Any]], MetricGroup],
         advance: int = 0,
+        tab: Optional[str] = None,
     ) -> Dict[str, float]:
         """记录一批指标；坐标（epoch/step）由 StepsBar 自动管理。
 
-        多 GPU 场景下先做 all_reduce 合并（默认取均值），再由 rank0
-        持久化、推送到 Web、刷新进度条。
+        多 GPU 场景下默认先做 all_reduce 合并（默认取均值），再由 rank0
+        持久化、推送到 Web、刷新进度条。**reduce=False 的 StepsBar 打开
+        中**（如训练期间只看 master 实时值）则跳过合并：不发起任何集合
+        通信，只规整并记录本卡本地值（各 rank 无需在对齐位置调用）；
+        bar 声明了 tab=... 时，不带 tab 的记录也归入该分区。
 
-        坐标规则：epoch 由 StepsBar(epoch=...) 绑定，step 取 epoch 内
-        下一个空槽（内部自增，全局 x 跨 epoch 连续接续）；未用 StepsBar
-        时退化为全局自增。要控制记录粒度（每步 / 每 N 步窗口），调整
-        调用 scalar() 的频率即可，无需也无法手动指定坐标。
+        坐标规则：epoch 由 StepsBar(epoch=..., tab=...) 绑定该分区序列，
+        step 取该序列 epoch 内下一个空槽（内部自增，同分区跨 epoch 连续
+        接续）；**各分区序列的 step 独立计数、互不影响**（写 val 不推进
+        train 的步数）；未用 StepsBar 时退化为该序列全局自增。要控制
+        记录粒度（每步 / 每 N 步窗口），调整调用 scalar() 的频率即可，
+        无需也无法手动指定坐标。
 
         Args:
             metrics: 指标名 -> 数值（float / int / 0 维 tensor）；
                 或直接传 MetricGroup——跨 GPU 同步合并由内部完成，
                 返回值在各 rank 上一致（开启新一轮统计需再调 metrics.reset()）。
+                reduce=False 场景改走本地规整（零通信，只记本卡值）。
             advance: 额外推进进度条的步数（StepsBar 迭代每次已自动
                 推进 1，缺省 0；仅一个迭代内多次 scalar() 等场景需要传入）。
+            tab: 面板分区名（如 "train" / "val" / "test"；StepsBar 的
+                tab=... 即透传到这里）：仅用于记录键的分区前缀
+                （``f"{tab}/{name}"``），供面板垂直分块，同时决定提交进
+                哪个分区序列；不影响进度条显示（postfix 始终用注册名）。
+                不传则记录进默认序列（StepsBar 声明了 tab 时归入该分区）。
         Returns:
-            合并后的指标（rank>0 也返回，便于本地打印）。
+            合并后的指标（rank>0 也返回，便于本地打印；reduce=False
+            场景为本卡本地值）。
         """
+        top = self._bars.top()
+        local = getattr(top, "reduce", True) is False  # reduce=False 的 bar 打开中
+        if tab is None:
+            tab = getattr(top, "tab", None)  # bar 声明了分区：不带 tab 的记录归入
         group = metrics if isinstance(metrics, MetricGroup) else None
         if group is not None:
-            if group._category:
-                self._announce_category(group._category)
-            metrics = group._compute()
-        merged = reduce_metrics(metrics, op=self.reduce_op)
+            metrics = group._compute_local(tab) if local else group._compute(tab)
+        elif tab:
+            metrics = {f"{tab}/{k}": v for k, v in metrics.items()}
+        if tab:
+            self._announce_tab(tab)
+        merged = local_metrics(metrics) if local else reduce_metrics(metrics, op=self.reduce_op)
 
         if not self._is_primary:
             return merged
 
         with self._lock:
-            x, out_epoch = self._axis.resolve_commit()
+            x, out_epoch = self._axis.resolve_commit(tab)
             self._journal.add(x, merged, out_epoch)
             self._push_web(x, merged, out_epoch)
-            # 进度条 postfix 显示用户注册名（category 前缀只用于落盘/面板分区）
+            # 进度条 postfix 显示用户注册名（tab 分区前缀只用于落盘/面板分区）
             bar_values = merged
-            if group is not None and group._category:
-                cat = group._category
+            if tab:
                 bar_values = {
-                    (k[len(cat) + 1:] if k.startswith(f"{cat}/") else k): v
+                    (k[len(tab) + 1:] if k.startswith(f"{tab}/") else k): v
                     for k, v in merged.items()
                 }
             self._bars.update_top(bar_values)
             if advance:
                 self._bars.advance_top(advance)
-            self._axis.commit(x, out_epoch)
+            self._axis.commit(x, out_epoch, tab)
         return merged
 
     # 兼容 wandb 风格别名
     log_metrics = scalar
 
-    def _record_local(self, values: Dict[str, Any]) -> None:
+    def _record_local(self, values: Dict[str, Any], section: Optional[str] = None) -> None:
         """记录本卡本地指标值（零通信；StepsBar 挂接的指标组 feed 时实时调用）。
 
         与 scalar() 的区别：不做跨 rank 合并，坐标规则相同（依附当前
-        绑定的 epoch 与下一个空槽）。仅 rank0 落盘，其余 rank 直接返回。
+        绑定的分区序列与该序列 epoch 内下一个空槽）。仅 rank0 落盘，
+        其余 rank 直接返回。
         """
         if not self._is_primary:
             return
         with self._lock:
-            x, out_epoch = self._axis.resolve_commit()
+            x, out_epoch = self._axis.resolve_commit(section)
             self._journal.add(x, values, out_epoch)
             self._push_web(x, values, out_epoch)
-            self._axis.commit(x, out_epoch)
+            self._axis.commit(x, out_epoch, section)
 
     # ------------------------------------------------------------------ 断点续训
-    def _bind_epoch(self, epoch: int) -> None:
+    def _bind_epoch(self, epoch: int, section: Optional[str] = None) -> None:
         """StepsBar 绑定 epoch 的统一入口（各 rank 都调用）。
 
-        rank0 上若该 epoch 在历史日志中已有记录（中断残留的重叠区），
-        先物理截断 x >= 该 epoch 基准的旧记录并回滚坐标轴，再正常绑定；
-        其余 rank 坐标不参与落盘，直接绑定。
+        rank0 上若该分区序列的这个 epoch 在历史日志中已有记录（中断
+        残留的重叠区），先物理截断 x >= 该 (分区, epoch) 基准的旧记录
+        并回滚该分区坐标轴，再正常绑定；其余 rank 坐标不参与落盘，
+        直接绑定。
         """
         with self._lock:
             if self._is_primary:
-                cut = self._axis.cut_on_rebind(epoch)
+                cut = self._axis.cut_on_rebind(epoch, section)
                 if cut is not None:
-                    self._apply_truncation(cut, epoch)
-            self._axis.bind_epoch(epoch)
+                    self._apply_truncation(cut, epoch, section)
+            self._axis.bind_epoch(epoch, section)
 
-    def _apply_truncation(self, cut: int, epoch: int) -> None:
-        """截断 x >= cut 的历史记录（调用方需持有锁且已判定需要截断）。
+    def _apply_truncation(self, cut: int, epoch: int, section: Optional[str] = None) -> None:
+        """截断该分区序列 x >= cut 的历史记录（调用方需持有锁且已判定需要截断）。
 
         中断残留总在最近一个历史会话文件的尾部，物理截断之（本会话
-        文件若已产生越界记录也一并处理）；内存历史、坐标轴同步回滚，
+        文件若已产生越界记录也一并处理）；**只截该分区序列**，其他分区
+        的记录 step 独立计数、不受影响。内存历史、该分区坐标轴同步回滚，
         并向已连接的面板广播全量历史（前端整体替换，不会出现 x 轴
         回退的折线）。
         """
+        tabs = tuple(self._tabs)
         self._journal.flush()
         last = (None, None)
         prev_file = self._last_history_file()
         if prev_file is not None:
-            last = MelogFile.truncate(prev_file, cut)
+            last = MelogFile.truncate(prev_file, cut, section=section, tabs=tabs)
         if last == (None, None):
-            last = self._journal.truncate_from(cut)
-        self.store.truncate(cut)
-        self._axis.rollback(cut, last)
+            last = self._journal.truncate_from(cut, section=section, tabs=tabs)
+        self.store.truncate(cut, section=section, tab_prefixes=tabs)
+        self._axis.rollback(cut, last, section)
         self.warn(f"epoch {epoch} 存在历史记录，截断 x >= {cut} 的重叠数据后继续")
         if self._web is not None:
             self._web.broadcast_history()
@@ -416,14 +450,15 @@ class Melog:
         self,
         group: MetricGroup,
         advance: int = 0,
+        tab: Optional[str] = None,
         reset: bool = False,
     ) -> Dict[str, float]:
         """合并记录一组 Metric 指标（内部方法，供 StepsBar epoch 末自动调用）。
 
         用户侧等价写法::
 
-            melog.scalar(group)   # 跨 GPU 同步合并由 scalar 内部完成
-            group.reset()         # 需要开启新一轮统计时
+            melog.scalar(group, tab="train")   # 跨 GPU 同步合并由 scalar 内部完成
+            group.reset()                      # 需要开启新一轮统计时
 
         所有 rank 都应调用；仅 rank0 持久化与展示。坐标自动依附
         当前绑定的 epoch（StepsBar）与下一个空槽。
@@ -431,9 +466,10 @@ class Melog:
         Args:
             group: MetricGroup 实例。
             advance: 额外推进进度条的步数，epoch 级记录默认不推进。
+            tab: 面板分区名（StepsBar 的 tab=...），记录键自动加前缀。
             reset: 记录后是否重置组内指标（开启新一轮 epoch 统计）。
         """
-        result = self.scalar(group, advance=advance)
+        result = self.scalar(group, advance=advance, tab=tab)
         if reset:
             group.reset()
         return result
@@ -506,22 +542,22 @@ class Melog:
             return
         self._console.warn(*values, sep=sep, end=end, flush=flush)
 
-    # ------------------------------------------------------------------ 大类别
-    def _announce_category(self, category: str) -> None:
-        """登记一个大类别（首次使用时持久化并推送面板；幂等）。
+    # ------------------------------------------------------------------ 分区 tab
+    def _announce_tab(self, tab: str) -> None:
+        """登记一个分区 tab（首次使用时持久化并推送面板；幂等）。
 
-        category 与指标名的对应不靠命名识别：类别名本身作为声明记录
-        随日志持久化（JSON 记录，复用媒体 block），历史日志重新加载
-        时据此恢复分区。
+        tab 与指标名的对应不靠命名识别：tab 名本身作为声明记录随日志
+        持久化（JSON 记录，复用媒体 block），历史日志重新加载时据此
+        恢复分区。
         """
-        if not category or category in self._categories:
+        if not tab or tab in self._tabs:
             return
-        self._categories.add(category)
+        self._tabs.append(tab)
         if not self._is_primary:
             return
-        self._journal.append({"type": "category", "name": category})
+        self._journal.append({"type": "tab", "name": tab})
         if self._web is not None:
-            self._web.publish_categories([category])
+            self._web.publish_tabs([tab])
 
     def _push_web(self, step: int, metrics: Dict[str, float], epoch: Optional[int] = None) -> None:
         if self._web is not None:

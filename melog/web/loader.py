@@ -75,12 +75,12 @@ class LogLoader:
         return dict(series)
 
     @staticmethod
-    def categories(target: _PATHS) -> List[str]:
-        """解析日志中声明的大类别（train/val/test），按首次出现顺序去重。"""
+    def tabs(target: _PATHS) -> List[str]:
+        """解析日志中声明的分区 tab（train/val/test），按首次出现顺序去重。"""
         out: List[str] = []
         for path in LogLoader._paths(target):
             for rec in MelogFileReader(path).media():
-                if rec.get("type") == "category" and isinstance(rec.get("name"), str):
+                if rec.get("type") == "tab" and isinstance(rec.get("name"), str):
                     if rec["name"] not in out:
                         out.append(rec["name"])
         return out

@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
+INIT = ROOT / "melog" / "__init__.py"  # 源码导入的 __version__ 回退值（无包元数据时）
 VERSION_PATTERN = 'version = "'
 
 
@@ -67,14 +68,18 @@ def bump(version: str, level: str) -> str:
     if level == "minor":
         return f"{major}.{minor + 1}.0"
     return f"{major}.{minor}.{patch + 1}"
-
-
 def set_version(new: str) -> None:
+    """同步 pyproject 的 version 与 melog/__init__.py 的源码导入回退值。"""
     text = PYPROJECT.read_text(encoding="utf-8")
     PYPROJECT.write_text(
         re.sub(r'^(version\s*=\s*)"[^"]+"', rf'\1"{new}"', text, count=1, flags=re.M),
         encoding="utf-8",
     )
+    init = INIT.read_text(encoding="utf-8")
+    new_init, n = re.subn(r'^(\s*__version__ = )"0\.0\.0"', rf'\1"{new}"',
+                          init, count=1, flags=re.M)
+    if n:
+        INIT.write_text(new_init, encoding="utf-8")
 
 
 def main() -> None:
@@ -90,7 +95,7 @@ def main() -> None:
     set_version(new)
 
     if not args.no_commit:
-        sh("git", "add", "pyproject.toml")
+        sh("git", "add", "pyproject.toml", str(INIT.relative_to(ROOT)))
         sh("git", "commit", "-m", f"chore: 版本升至 v{new}")
         sh("git", "tag", f"v{new}")
 

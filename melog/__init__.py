@@ -31,7 +31,12 @@ from .metrics import (
     Sum,
 )
 
-__version__ = "0.1.0"
+try:  # 安装后的版本随包元数据（与 pyproject 一致）；源码直接导入无元数据时回退
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("melog")
+except Exception:  # pragma: no cover
+    __version__ = "1.4.0"  # 发布脚本（scripts/release.py）升版本时同步更新此回退值
 __all__ = [
     "init",
     "current",

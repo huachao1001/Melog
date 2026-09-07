@@ -163,16 +163,14 @@ def _fmt_clock(seconds: float) -> str:
 
 
 def _fmt_value(value: Any) -> str:
-    """postfix 指标值：常规范围浮点固定 4 位小数（宽度恒定、小数点对齐），
-    过大 / 过小退化为 4 位有效数字，其余原样。"""
+    """postfix 指标值：浮点用科学计数法保留 3 位小数（宽度恒定、小数点对齐），
+    其余原样。"""
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        if 1e-2 <= abs(value) < 1e4:
-            return f"{value:.4f}"
-        return f"{value:.4g}"
+        return f"{value:.3e}"
     return str(value)
 
 

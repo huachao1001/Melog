@@ -141,7 +141,7 @@ def test_tqdm_layout_order():
         bar.set_postfix(loss=0.5)
     line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1].rstrip()
     # 段序：指标 < 条形 < 百分比 < [n/total] < 耗时尾段（n 右对齐到 total 宽度）
-    assert line.index("loss=0.5") < line.index("━") < line.index("10.0%")
+    assert line.index("loss=5.000e-01") < line.index("━") < line.index("10.0%")
     assert line.index("10.0%") < line.index("[ 1/10]") < line.index("[0:00<")
     assert not line.startswith("train")  # 无 desc 时不显示前缀
 
@@ -155,12 +155,12 @@ def test_tqdm_postfix_stable_width():
     bar.close()
     lines = [s for s in out.getvalue().rstrip("\n").split("\r") if "loss=" in s]
     assert len({len(s) for s in lines}) == 1  # 常规范围：各帧行宽一致
-    assert "loss=0.5615" in lines[-1]
+    assert "loss=5.615e-01" in lines[-1]
 
     out2 = io.StringIO()
     bar2 = tqdm(total=10, file=out2, mininterval=0)
     bar2.set_postfix(loss=0.5615)
-    bar2.set_postfix(loss=12.34567)  # 更宽 → 定宽字段扩一次
+    bar2.set_postfix(loss=1e-100)  # 指数更宽 → 定宽字段扩一次
     bar2.set_postfix(loss=0.796)  # 变窄 → 字段保持宽度，不回摆
     bar2.close()
     lines2 = [s for s in out2.getvalue().rstrip("\n").split("\r") if "loss=" in s]
@@ -174,7 +174,7 @@ def test_tqdm_manual_update_and_postfix():
         bar.set_postfix(loss=0.215300001)
         line = out.getvalue().splitlines()[-1] if "\n" in out.getvalue() else out.getvalue()
     assert "4/10" in out.getvalue()
-    assert "loss=0.2153" in out.getvalue()
+    assert "loss=2.153e-01" in out.getvalue()
     assert bar.n == 4
 
 
@@ -265,7 +265,7 @@ def test_tqdm_shrinks_bar_then_truncates_postfix(monkeypatch):
     plain = re.sub(r"\x1b\[[0-9;:?]*[ -/]*[@-~]", "", line).rstrip()
     assert _display_width(plain) == 40  # 收缩后仍恰好占满整行、不换行
     assert plain.count("━") + plain.count("─") == _BAR_MIN  # 进度条已收缩到最小
-    assert "loss=0…" in plain  # 指标区部分保留 + 省略号收尾
+    assert "loss=5…" in plain  # 指标区部分保留 + 省略号收尾
     assert "acc" not in plain  # 装不下的整格丢弃
 
 
@@ -294,7 +294,7 @@ def test_tqdm_fixed_bar_width_on_pipe():
     bar.close()
     line = [s for s in out.getvalue().rstrip("\n").split("\r") if s.strip()][-1].rstrip()
     assert line.count("━") + line.count("─") == BAR_WIDTH  # 基准宽度不变
-    assert "loss=0.5000" in line and "acc=0.2500" in line  # 指标不截断
+    assert "loss=5.000e-01" in line and "acc=2.500e-01" in line  # 指标不截断
 
 
 def test_melog_progress_iterates_and_autoupdates(tmp_path):
@@ -324,7 +324,7 @@ def test_melog_progress_shows_log_postfix(tmp_path):
     finally:
         lg.close()
     log_path = next((tmp_path / "t").glob("**/*console-*.log"))
-    assert "loss=0.5" in read(log_path)
+    assert "loss=5.000e-01" in read(log_path)
 
 
 def test_melog_progress_reusable_across_epochs(tmp_path):
@@ -483,7 +483,7 @@ def test_melog_mirrors_console_log(tmp_path, capsys):
     assert log_path.name.startswith("console-") and log_path.name.endswith(".log")
     text = read(log_path)
     assert "step done\n" in text
-    assert "loss=0.5" in text          # 进度条 postfix
+    assert "loss=5.000e-01" in text          # 进度条 postfix
     assert "2/2" in text               # 定稿的最终进度
 
 

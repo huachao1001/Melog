@@ -15,9 +15,16 @@
  */
 import { PointDownsampler } from './downsample.js';
 
-// 图表数值显示：最多小数点后 3 位，尾随 0 省略（0.5 不显示成 0.500）
+// 图表数值显示：最多小数点后 3 位，尾随 0 省略（0.5 不显示成 0.500）；
+// 绝对值 < 1e-3 的非零值用科学计数法（与终端 1.500e-06 显示一致，避免舍入成 0）
 const fmt3 = (v) => {
-  const s = Number(v).toFixed(3).replace(/\.?0+$/, '');
+  const n = Number(v);
+  if (!isFinite(n)) return String(n);
+  if (n !== 0 && Math.abs(n) < 1e-3) {
+    const s = n.toExponential(3).replace(/(\.\d*?)0+e/, '$1e').replace(/\.0*e/, 'e');
+    return s;
+  }
+  const s = n.toFixed(3).replace(/\.?0+$/, '');
   return s === '-0' ? '0' : s;
 };
 

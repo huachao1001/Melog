@@ -335,6 +335,8 @@ class tqdm:
             self.render(force=True)
             if self.leave:
                 stream.write("\n")
+            elif _is_tty(stream):
+                stream.write("\x1b[2K\r")  # 擦除整行：老宽度残留一并清除
             else:
                 stream.write("\r" + " " * self._rendered_len + "\r")
             if self._cursor_hidden:
@@ -386,20 +388,33 @@ class tqdm:
         """把当前状态渲染为一行并以 \\r 结尾输出（终端原地重绘）。
 
         终端下带 Melog 主题色，并按终端列数自适应（占满整行 / 收缩 /
-        截断，见 _format）；pad 计算按可见宽度（ANSI 码零显示宽度）。
+        截断，见 _format）；终端以 ``\\x1b[2K`` 擦除整行后重写。
         内容与上次渲染相同且非强制时跳过：屏幕已是最新，日志文件侧也不
         重复落盘；force 用于屏幕行被消息擦除、子条覆盖后的修复性重绘。
         """
         stream = self._stream()
-        line, plain = self._format(self._use_color(stream), _term_width(stream))
+        tty = _is_tty(stream)
+        width = _term_width(stream)
+        line, plain = self._format(self._use_color(stream), width)
         plain_w = _display_width(plain)
         if not force and plain == self._last_plain:
             return
-        # 行变短时用空格覆盖残留（文件侧由 Mirror 截断重写并剥离颜色码）
-        pad = " " * max(0, self._rendered_len - plain_w)
-        stream.write(line + pad + "\r")
+        if tty:
+            # 终端：\x1b[2K 擦除整行后重写（渲染以 \r 结尾、光标停在行首，
+            # 擦除总落在进度条行上）。终端列数可被拖动缩放：行变短时旧帧在
+            # 新列宽之外的残留无法用补空格覆盖（补到旧宽度必超宽换行，而
+            # _rendered_len 只增不减，会陷入“一旦换行就一直换行”），整行擦除
+            # 则怎么拖动都干净；行变长时擦除也无副作用（整行本就要重写）。
+            # 文件侧 \x1b[2K 由 Mirror 剥离，协议仍按 \r 行处理
+            stream.write("\x1b[2K" + line + "\r")
+            self._rendered_len = plain_w
+        else:
+            # 重定向 / 管道无擦除码概念：行变短时用空格覆盖残留
+            # （文件侧由 Mirror 截断重写并剥离颜色码）
+            pad = " " * max(0, self._rendered_len - plain_w)
+            stream.write(line + pad + "\r")
+            self._rendered_len = plain_w + len(pad)
         stream.flush()
-        self._rendered_len = plain_w + len(pad)
         self._last_render = time.monotonic()
         self._last_plain = plain
 
@@ -417,7 +432,9 @@ class tqdm:
         - 进度条为弹性段，吃掉固定段（desc / 指标 / 百分比 / 计数 / 耗时）
           之外的**全部剩余列**，恰好占满整行（宽终端下条形随之加长）；
         - 剩余列不足时进度条收缩到 _BAR_MIN（指标区优先保全）；
-        - 条已最小仍放不下指标时，指标区截断、以省略号收尾。
+        - 条已最小仍放不下指标时，指标区截断、以省略号收尾；
+        - 固定段本身放不下（极窄终端）时逐级退化：速率 → 剩余时间 →
+          整段耗时 → 百分比，计数是身份最后让位。
         width 为 None（重定向 / 管道 / 日志文件侧没有列宽概念）时按固定
         宽度渲染，进度条恒为 BAR_WIDTH、指标不截断（与旧行为一致）。
         """
@@ -478,8 +495,22 @@ class tqdm:
 
         # ---- 弹性布局（仅终端有列数时）：占满整行 → 收缩进度条 → 截断指标
         bar_w: Optional[int] = BAR_WIDTH if self.total else None
+        pct_eff, tail_eff = pct_seg, tail
         if width is not None:
-            fixed_segs = [s for s in (desc_seg, pct_seg, count_seg, *tail) if s[0]]
+            # 极窄终端：固定段（百分比 / 计数 / 尾段）连空格都放不进整行时
+            # 逐级退化（速率 → 剩余时间 → 整个尾段 → 百分比），计数是身份
+            # 最后让位；取含空格后恰好能放下的最高保真级。正常宽度首级即
+            # 放下，不触发；放不下的剩余空间照常给进度条 / 指标区伸缩
+            for pct_eff, tail_eff in (
+                    (pct_seg, tail),
+                    (pct_seg, [seg(f"[{time_part}]", _DIM)] if rate_part else tail),
+                    (pct_seg, [seg(f"[{_fmt_clock(elapsed)}]", _DIM)]),
+                    (pct_seg, []),
+                    (("", ""), [])):
+                fixed_segs = [s for s in (desc_seg, pct_eff, count_seg, *tail_eff) if s[0]]
+                if sum(_display_width(p[1]) for p in fixed_segs) \
+                        + max(0, len(fixed_segs) - 1) <= width:
+                    break
             fixed_w = sum(_display_width(p[1]) for p in fixed_segs)
 
             def _budget(cells_present: bool) -> int:
@@ -508,11 +539,13 @@ class tqdm:
                             bar_w = budget - used  # 指标截断后的剩余列归还进度条（恰好占满）
                         else:  # 指标一格都放不下：整段让位，进度条吃满剩余列
                             cells = []
-                            bar_w = max(1, _budget(False))
+                            # 进度条恒为弹性段：剩余列为负（固定段已占满整行）
+                            # 时整段消失（max 保底 1 列必超宽换行），不超行优先
+                            bar_w = max(0, _budget(False))
                 else:  # 无进度条段（未绑 total）：指标独占剩余列，超宽省略号截断
                     cells = _fit_cells(cells, budget)
             elif self.total:
-                bar_w = max(1, _budget(False))
+                bar_w = max(0, _budget(False))  # 剩余列为负时整段让位，不超行优先
 
         postfix: Tuple[str, str] = ("", "")
         if cells:
@@ -526,12 +559,12 @@ class tqdm:
             parts.append(postfix)
             parts.append((self._render_bar(filled, bar_w, use_color),
                           _FILL * filled + _EMPTY * (bar_w - filled)))
-            parts.append(pct_seg)
+            parts.append(pct_eff)
             parts.append(count_seg)
         else:
             parts.append(postfix)
             parts.append(count_seg)
-        parts.extend(tail)
+        parts.extend(tail_eff)
 
         drop_empty = lambda p: bool(p[0])  # noqa: E731  # 空片段不占位，避免多余空格
         kept = [p for p in parts if drop_empty(p)]

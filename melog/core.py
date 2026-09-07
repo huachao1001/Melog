@@ -170,7 +170,6 @@ class Melog:
         # 多进程时仅 rank0 创建目录，其余进程等待
         if self._is_primary:
             run_dir.mkdir(parents=True, exist_ok=True)
-            (run_dir / "rank.txt").write_text(str(self._rank), encoding="utf-8")
         return run_dir
 
     def _next_session_number(self) -> int:
